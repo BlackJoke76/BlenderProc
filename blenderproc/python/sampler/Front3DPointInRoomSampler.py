@@ -4,6 +4,7 @@ import random
 from typing import List
 
 import numpy as np
+import bpy
 
 from blenderproc.python.types.MeshObjectUtility import MeshObject
 
@@ -25,20 +26,22 @@ class Front3DPointInRoomSampler:
         floor_objs = [obj for obj in front3d_objects if obj.get_name().lower().startswith("floor")]
 
         # count objects per floor -> room
-        floor_obj_counters = {obj.get_name(): 0 for obj in floor_objs}
+        self.floor_obj_counters = {obj.get_name(): 0 for obj in floor_objs}
         counter = 0
         for obj in front3d_objects:
             name = obj.get_name().lower()
-            if "wall" in name or "ceiling" in name:
+            if "wall" in name or "ceiling" in name or "floor" in name or "baseboard" in name or "pocket" in name \
+                or "hole" in name or "door" in name or "window" in name or "cabinet" in name or "lightband" in name \
+                or "slabbottom" in name or "slabside" in name:
                 continue
             counter += 1
 
             for floor_obj in floor_objs:
                 is_above = floor_obj.position_is_above_object(obj.get_location())
                 if is_above:
-                    floor_obj_counters[floor_obj.get_name()] += 1
+                    self.floor_obj_counters[floor_obj.get_name()] += 1
         self.used_floors = [obj for obj in floor_objs if
-                            floor_obj_counters[obj.get_name()] > amount_of_objects_needed_per_room]
+                            self.floor_obj_counters[obj.get_name()] > amount_of_objects_needed_per_room]
 
     def sample(self, height: float, max_tries: int = 1000) -> np.ndarray:
         """ Samples a point inside one of the loaded Front3d rooms.
@@ -52,7 +55,9 @@ class Front3DPointInRoomSampler:
         """
         for _ in range(max_tries):
             # Sample room via floor objects
+            
             floor_obj = random.choice(self.used_floors)
+            
 
             # Get min/max along x/y-axis from bounding box of room
             bounding_box = floor_obj.get_bound_box()

@@ -5,7 +5,6 @@ from typing import Union, List, Optional, Tuple
 import bpy
 import numpy as np
 from mathutils import Vector, Euler, Matrix
-from trimesh import Trimesh
 
 from blenderproc.python.utility.Utility import KeyFrame
 from blenderproc.python.types.EntityUtility import Entity
@@ -347,57 +346,45 @@ class Link(Entity):
         for obj in self.get_all_objs():
             obj.hide(hide_object=hide_object)
 
-    def get_visual_local2world_mats(self, parent2world_matrix: Optional[Matrix] = None) -> Optional[List[Matrix]]:
+    def get_visual_local2world_mats(self) -> Optional[List[Matrix]]:
         """Returns the transformation matrices from world to the visual parts.
 
-        :param parent2world_matrix: The transformation from the link's armature to the world frame.
         :return: List of transformation matrices.
         """
         bpy.context.view_layer.update()
-        if parent2world_matrix is None:
-            parent2world_matrix = Matrix(Entity(self.armature).get_local2world_mat())
         bone_mat = Matrix.Identity(4)
         if self.bone is not None:
             bone_mat = self.bone.matrix
         if self.visuals:
-            link2base_mats = [bone_mat @ (self.link2bone_mat.inverted() @ visual_local2link_mat) for
-                              visual_local2link_mat in self.visual_local2link_mats]
-            return [parent2world_matrix @ mat for mat in link2base_mats]
+            return [bone_mat @ (self.link2bone_mat.inverted() @ visual_local2link_mat) for visual_local2link_mat in
+                    self.visual_local2link_mats]
         return None
 
-    def get_collision_local2world_mats(self, parent2world_matrix: Optional[Matrix] = None) -> Optional[List[Matrix]]:
+    def get_collision_local2world_mats(self) -> Optional[List[Matrix]]:
         """Returns the transformation matrices from world to the collision parts.
 
-        :param parent2world_matrix: The transformation from the link's armature to the world frame.
         :return: List of transformation matrices.
         """
         bpy.context.view_layer.update()
-        if parent2world_matrix is None:
-            parent2world_matrix = Matrix(Entity(self.armature).get_local2world_mat())
         bone_mat = Matrix.Identity(4)
         if self.bone is not None:
             bone_mat = self.bone.matrix
         if self.collisions:
-            link2base_mats = [bone_mat @ (self.link2bone_mat.inverted() @ collision_local2link_mat) for
-                              collision_local2link_mat in self.collision_local2link_mats]
-            return [parent2world_matrix @ mat for mat in link2base_mats]
+            return [bone_mat @ (self.link2bone_mat.inverted() @ collision_local2link_mat) for collision_local2link_mat
+                    in self.collision_local2link_mats]
         return None
 
-    def get_inertial_local2world_mat(self, parent2world_matrix: Optional[Matrix] = None) -> Optional[Matrix]:
+    def get_inertial_local2world_mat(self) -> Matrix:
         """Returns the transformation matrix from world to the inertial part.
 
-        :param parent2world_matrix: The transformation from the link's armature to the world frame.
         :return: The transformation matrix.
         """
         bpy.context.view_layer.update()
-        if parent2world_matrix is None:
-            parent2world_matrix = Matrix(Entity(self.armature).get_local2world_mat())
         bone_mat = Matrix.Identity(4)
         if self.bone is not None:
             bone_mat = self.bone.matrix
         if self.inertial is not None:
-            link2base_mat = bone_mat @ (self.link2bone_mat.inverted() @ self.inertial_local2link_mat)
-            return parent2world_matrix @ link2base_mat
+            return bone_mat @ (self.link2bone_mat.inverted() @ self.inertial_local2link_mat)
         return None
 
     def get_all_objs(self):
@@ -617,16 +604,5 @@ class Link(Entity):
         visual_matrix = M1 @ M_parent_data @ M2 @ M_pose
 
         return visual_matrix.to_quaternion().angle
-
-    def mesh_as_trimesh(self) -> Optional[Trimesh]:
-        """ Returns a trimesh.Trimesh instance of the link's first visual object, if it exists.
-
-        :return: The link's first visual object as trimesh.Trimesh if the link has one or more visuals, else None.
-        """
-        # get mesh data
-        if self.visuals:
-            return self.visuals[0].mesh_as_trimesh()
-
-        return None
 
 # pylint: enable=no-member

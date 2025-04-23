@@ -88,7 +88,7 @@ def write_hdf5(output_dir_path: str, output_data_dict: Dict[str, List[Union[np.n
                                     f" {len(data_block)} in the given list for key {key}.")
             blender_proc_version = Utility.get_current_version()
             if blender_proc_version is not None:
-                _WriterUtility.write_to_hdf_file(file, "blender_proc_version", np.bytes_(blender_proc_version))
+                _WriterUtility.write_to_hdf_file(file, "blender_proc_version", np.string_(blender_proc_version))
 
 
 class _WriterUtility:
@@ -166,7 +166,7 @@ class _WriterUtility:
 
     @staticmethod
     def load_output_file(file_path: str, load_alpha_channel: bool = False,
-                         remove: bool = True) -> Union[np.ndarray, List[Any]]:
+                         remove: bool = False) -> Union[np.ndarray, List[Any]]:
         """ Tries to read in the file with the given path into a numpy array.
 
         :param file_path: The file path. Type: string.
@@ -197,7 +197,14 @@ class _WriterUtility:
     def load_csv(file_path: str) -> List[Any]:
         """ Load the csv file at the given path.
 
-        :param file_path: The path. Type: string.
+        :param f        cur_floor = None
+        for floor in floor_objs:
+            if(floor.position_is_above_object(location, check_no_objects_in_between=False)):
+                cur_floor = floor
+                break
+        
+        if(cur_floor == None):
+            continueile_path: The path. Type: string.
         :return: The content of the file
         """
         rows = []
@@ -353,7 +360,7 @@ class _WriterUtility:
                 # If the data contains one or multiple dicts that contain e.q. object states
                 if isinstance(data, dict) or len(data) > 0 and isinstance(data[0], dict):
                     # Serialize them into json (automatically convert numpy arrays to lists)
-                    data = np.bytes_(json.dumps(data, cls=NumpyEncoder))
+                    data = np.string_(json.dumps(data, cls=NumpyEncoder))
                 data = np.array(data)
             else:
                 raise Exception(

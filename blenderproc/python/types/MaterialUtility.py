@@ -127,7 +127,11 @@ class Material(Struct):
         :param source_socket: The source socket.
         :param dest_socket: The destination socket
         """
-        self.links.remove(source_socket, dest_socket)
+        links = self.links
+        for link in links:
+            if link.to_node == dest_socket:
+                self.links.remove(link)
+                break
 
     def map_vertex_color(self, layer_name: str = 'Col', active_shading: bool = True):
         """ Maps existing vertex color to the base color of the principled bsdf node or a new background color node.
@@ -160,12 +164,253 @@ class Material(Struct):
             else:
                 raise RuntimeError(f"Material '{self.blender_obj.name}' has no node connected to the output, "
                                    f"which has as a 'Base Color' input.")
+                    
+
+
+
+
+    def remove_transparent(self):
+        for node in self.get_nodes_created_in_func(self.make_transparent.__name__):
+            self.remove_node(node)
+
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        if len(self.get_nodes_with_type("BsdfPrincipled")) == 0:
+            return
+        
+        principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
+        self.link(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+
+    def remove_light_indirect_effect(self):
+        for node in self.get_nodes_created_in_func(self.make_light_indirect_effect.__name__):
+            self.remove_node(node) 
 
     def remove_emissive(self):
         """ Remove emissive part of the material.
         """
         for node in self.get_nodes_created_in_func(self.make_emissive.__name__):
             self.remove_node(node)
+
+    def remove_transparent_light(self):
+        """ Remove emissive part of the material.
+        """
+        for node in self.get_nodes_created_in_func(self.make_transparent_light.__name__):
+            self.remove_node(node)
+
+    def remove_point_light_indirect_effect(self):
+        for node in self.get_nodes_created_in_func(self.make_point_light_indirect_effect.__name__):
+            self.remove_node(node)
+
+        output_node = self.get_the_one_node_with_type("ShaderNodeOutputLight")
+        emission_node = self.get_nodes_with_type("Emission")[0]
+        self.link(emission_node.outputs['Emission'], output_node.inputs['Surface'])
+    
+    def remove_indirect_effect_v2(self):
+        for node in self.get_nodes_created_in_func(self.make_indirect_effect_v2.__name__):
+            self.remove_node(node) 
+
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        if len(self.get_nodes_with_type("BsdfPrincipled")) == 0:
+            return
+        principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
+        self.link(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+
+        
+    def make_transparent(self):
+
+        self.remove_emissive()
+        self.remove_transparent()
+
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        if len(self.get_nodes_with_type("BsdfPrincipled")) == 0:
+            return
+        principled_bsdf = self.get_the_one_node_with_type("BsdfPrincipled")
+        transparent_node = self.new_node('ShaderNodeBsdfTransparent', self.make_transparent.__name__)
+        light_path_node = self.new_node('ShaderNodeLightPath', self.make_transparent.__name__)
+        mix_node = self.new_node('ShaderNodeMixShader', self.make_transparent.__name__)
+
+        self.unlink(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+        self.link(transparent_node.outputs['BSDF'], mix_node.inputs[1])
+        self.link(principled_bsdf.outputs['BSDF'], mix_node.inputs[2])
+        self.link(mix_node.outputs['Shader'], output_node.inputs['Surface'])
+        self.link(light_path_node.outputs['Is Camera Ray'], mix_node.inputs['Fac'])
+    
+    def make_transparent_light(self, emission_strength, emission_color):
+        self.remove_emissive()
+        self.remove_transparent_light()
+
+        # self.nodes = material.node_tree.nodes 
+        # self.node_tree.nodes['Principled BSDF']
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        principled_bsdf = self.get_the_one_node_with_type("BsdfPrincipled")
+
+        mix_node1 = self.new_node('ShaderNodeMixShader', self.make_transparent_light.__name__)
+        mix_node2 = self.new_node('ShaderNodeMixShader', self.make_transparent_light.__name__)
+        Less_Than = self.new_node('ShaderNodeMath', self.make_transparent_light.__name__)
+        Less_Than.operation = 'LESS_THAN'
+        light_path_node = self.new_node('ShaderNodeLightPath', self.make_transparent_light.__name__)
+        emission_node = self.new_node('ShaderNodeEmission', self.make_transparent_light.__name__)
+        emission_node_H = self.new_node('ShaderNodeEmission', self.make_transparent_light.__name__)
+
+        if emission_color is None:
+            
+            if len(principled_bsdf.inputs["Base Color"].links) == 1:
+                # get the node connected to the Base Color
+                socket_connected_to_the_base_color = principled_bsdf.inputs["Base Color"].links[0].from_socket
+                self.link(socket_connected_to_the_base_color, emission_node.inputs["Color"])
+            else:
+                emission_node.inputs["Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
+        else:
+            emission_node.inputs["Color"].default_value = emission_color
+    
+        emission_node.inputs['Strength'].default_value = emission_strength
+        emission_node_H.inputs['Strength'].default_value = emission_strength + 1 
+
+        self.unlink(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+        self.link(emission_node_H.outputs['Emission'], mix_node1.inputs[1])
+        self.link(principled_bsdf.outputs['BSDF'], mix_node2.inputs[2])
+        self.link(light_path_node.outputs['Transparent Depth'], Less_Than.inputs[0])
+        self.link(emission_node.outputs['Emission'], mix_node1.inputs[2])
+        Less_Than.inputs[1].default_value = 2.0 
+        self.link(Less_Than.outputs['Value'], mix_node1.inputs['Fac'])
+        self.link(light_path_node.outputs['Is Camera Ray'], mix_node2.inputs['Fac'])
+        self.link(mix_node1.outputs['Shader'], mix_node2.inputs[1])
+        self.link(mix_node2.outputs['Shader'],output_node.inputs['Surface'])
+    
+    def make_point_light_indirect_effect(self):
+        self.remove_point_light_indirect_effect()
+        # print(self.nodes[0].bl_idname)
+        # print(self.nodes[0].bl_idname)
+        output_node = self.get_the_one_node_with_type("ShaderNodeOutputLight")
+        emission_node1 = self.get_nodes_with_type("Emission")[0]
+        self.unlink(emission_node1.outputs['Emission'], output_node.inputs['Surface'])
+
+        mix_node = self.new_node('ShaderNodeMixShader', self.make_point_light_indirect_effect.__name__)
+        Less_Than = self.new_node('ShaderNodeMath', self.make_point_light_indirect_effect.__name__)
+        Less_Than.operation = 'LESS_THAN'
+        emission_node2 = self.new_node("ShaderNodeEmission", self.make_point_light_indirect_effect.__name__)
+        light_path_node = self.new_node('ShaderNodeLightPath', self.make_point_light_indirect_effect.__name__)
+
+        emission_node2.inputs['Strength'].default_value = 0.0
+
+        self.link(light_path_node.outputs['Ray Depth'], Less_Than.inputs[0])
+        self.link(emission_node1.outputs['Emission'], mix_node.inputs[1])
+        self.link(emission_node2.outputs['Emission'], mix_node.inputs[2])
+
+        Less_Than.inputs[1].default_value = 2.0
+        self.link(Less_Than.outputs['Value'], mix_node.inputs['Fac'])
+        self.link(mix_node.outputs['Shader'],output_node.inputs['Surface'])
+
+    def make_light_indirect_effect(self, emission_strength: float, emission_color: List[float] = None):
+        self.remove_emissive()
+        self.remove_transparent()
+        self.remove_light_indirect_effect()
+        self.remove_transparent_light()
+
+        # self.nodes = material.node_tree.nodes 
+        # self.node_tree.nodes['Principled BSDF']
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        if len(self.get_nodes_with_type("BsdfPrincipled")) == 0:
+            return
+        principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
+
+        mix_node1 = self.new_node('ShaderNodeMixShader', self.make_light_indirect_effect.__name__)
+        mix_node2 = self.new_node('ShaderNodeMixShader', self.make_light_indirect_effect.__name__)
+        Less_Than = self.new_node('ShaderNodeMath', self.make_light_indirect_effect.__name__)
+        Less_Than.operation = 'LESS_THAN'
+        light_path_node = self.new_node('ShaderNodeLightPath', self.make_light_indirect_effect.__name__)
+        # emission_node = self.new_node('ShaderNodeEmission', self.make_light_indirect_effect.__name__)
+        emission_node_bsdf = self.new_node('ShaderNodeBsdfPrincipled', self.make_emissive.__name__)
+            # Subsurface IOR
+        emission_node_bsdf.inputs['Subsurface'].default_value = 0.0
+        emission_node_bsdf.inputs['Specular'].default_value = 0.0
+        emission_node_bsdf.inputs['Roughness'].default_value = 0.0
+        emission_node_bsdf.inputs['Sheen Tint'].default_value = 0.0
+        emission_node_bsdf.inputs['Clearcoat Roughness'].default_value = 0.0
+        emission_node_bsdf.inputs['Alpha'].default_value = 0.01
+
+        new_bsdf = self.new_node('ShaderNodeBsdfDiffuse', self.make_light_indirect_effect.__name__)
+        if emission_color is None:
+            
+            if len(principled_bsdf.inputs["Base Color"].links) == 1:
+                # get the node connected to the Base Color
+                socket_connected_to_the_base_color = principled_bsdf.inputs["Base Color"].links[0].from_socket
+                # self.link(socket_connected_to_the_base_color, emission_node.inputs["Color"])
+                self.link(socket_connected_to_the_base_color, emission_node_bsdf.inputs["Base Color"])
+            else:
+                # emission_node.inputs["Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
+                emission_node_bsdf.inputs["Base Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
+        else:
+            # emission_node.inputs["Color"].default_value = emission_color
+            emission_node_bsdf.inputs["Emission"].default_value = emission_color
+
+        # set the emission strength of the shader
+        # emission_node.inputs['Strength'].default_value = emission_strength
+        emission_node_bsdf.inputs['Emission Strength'].default_value = emission_strength
+        new_bsdf.inputs['Color'].default_value = [0.0, 0.0, 0.0 , 1.0]
+
+        self.unlink(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+        self.link(new_bsdf.outputs['BSDF'], mix_node1.inputs[2])
+        self.link(principled_bsdf.outputs['BSDF'], mix_node2.inputs[2])
+        self.link(light_path_node.outputs['Ray Depth'], Less_Than.inputs[0])
+        self.link(emission_node_bsdf.outputs['BSDF'], mix_node1.inputs[1])
+        Less_Than.inputs[1].default_value = 2.0
+        self.link(Less_Than.outputs['Value'], mix_node1.inputs['Fac'])
+        self.link(light_path_node.outputs['Is Camera Ray'], mix_node2.inputs['Fac'])
+        self.link(mix_node1.outputs['Shader'], mix_node2.inputs[1])
+        self.link(mix_node2.outputs['Shader'],output_node.inputs['Surface'])
+
+    def make_indirect_effect_v2(self, ray_length = 1.0):
+        self.remove_emissive()
+        self.remove_transparent()
+        self.remove_transparent_light()
+        self.remove_indirect_effect_v2()
+        output_node = self.get_the_one_node_with_type("OutputMaterial")
+        if len(self.get_nodes_with_type("BsdfPrincipled")) == 0:
+            return
+        principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
+
+        mix_node = self.new_node('ShaderNodeMixShader', self.make_indirect_effect_v2.__name__)
+        Compare = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        Less_Than = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        Greater_Than = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        Modulo = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        Add = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        Multiply = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        # Multiply_1 = self.new_node('ShaderNodeMath', self.make_indirect_effect_v2.__name__)
+        light_path_node = self.new_node('ShaderNodeLightPath', self.make_indirect_effect_v2.__name__)
+        transparent_node = self.new_node('ShaderNodeBsdfTransparent', self.make_indirect_effect_v2.__name__)
+
+        Compare.operation = 'COMPARE'
+        Less_Than.operation = 'LESS_THAN'
+        Greater_Than.operation = 'GREATER_THAN'
+        Multiply.operation = 'MULTIPLY'
+        # Multiply_1.operation = 'MULTIPLY'
+        Modulo.operation = 'MODULO'
+        Add.operation = 'ADD'
+        Compare.inputs[1].default_value = 1.0
+        Compare.inputs[2].default_value = 0.01
+        Less_Than.inputs[1].default_value = ray_length
+        Greater_Than.inputs[1].default_value = 0.9
+        Modulo.inputs[1].default_value = 2.0
+
+        self.unlink(principled_bsdf.outputs['BSDF'], output_node.inputs['Surface'])
+        self.link(Less_Than.inputs[0], light_path_node.outputs['Ray Length'])
+        self.link(Greater_Than.inputs[0], light_path_node.outputs['Ray Depth'])
+        self.link(Modulo.inputs[0], light_path_node.outputs['Transparent Depth'])
+        self.link(Less_Than.outputs['Value'], Multiply.inputs[0])
+        self.link(Greater_Than.outputs['Value'], Multiply.inputs[1])
+        self.link(Modulo.outputs['Value'], Compare.inputs[0])
+        self.link(Compare.outputs['Value'], Add.inputs[0])
+        self.link(Multiply.outputs['Value'], Add.inputs[1])
+        self.link(Add.outputs['Value'], mix_node.inputs[0])
+
+
+        
+
+        self.link(principled_bsdf.outputs['BSDF'],  mix_node.inputs[1])
+        self.link(transparent_node.outputs['BSDF'], mix_node.inputs[2])
+
+        self.link(mix_node.outputs['Shader'],output_node.inputs['Surface'])
 
     def make_emissive(self, emission_strength: float, replace: bool = False, emission_color: List[float] = None,
                       non_emissive_color_socket: bpy.types.NodeSocket = None):
@@ -186,7 +431,7 @@ class Material(Struct):
         if not replace:
             mix_node = self.new_node('ShaderNodeMixShader', self.make_emissive.__name__)
             if non_emissive_color_socket is None:
-                principled_bsdf = self.get_the_one_node_with_type("BsdfPrincipled")
+                principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
                 non_emissive_color_socket = principled_bsdf.outputs['BSDF']
             self.insert_node_instead_existing_link(non_emissive_color_socket, mix_node.inputs[2],
                                                    mix_node.outputs['Shader'], output_node.inputs['Surface'])
@@ -200,23 +445,37 @@ class Material(Struct):
         else:
             output_socket = output_node.inputs['Surface']
 
-        emission_node = self.new_node('ShaderNodeEmission', self.make_emissive.__name__)
+        # emission_node = self.new_node('ShaderNodeEmission', self.make_emissive.__name__)
+        emission_node_bsdf = self.new_node('ShaderNodeBsdfPrincipled', self.make_emissive.__name__)
+            # Subsurface IOR
+        emission_node_bsdf.inputs['Subsurface'].default_value = 0.0
+        emission_node_bsdf.inputs['Specular'].default_value = 0.0
+        emission_node_bsdf.inputs['Roughness'].default_value = 0.0
+        emission_node_bsdf.inputs['Sheen Tint'].default_value = 0.0
+        emission_node_bsdf.inputs['Clearcoat Roughness'].default_value = 0.0
+        emission_node_bsdf.inputs['Alpha'].default_value = 0.01
 
         if emission_color is None:
-            principled_bsdf = self.get_the_one_node_with_type("BsdfPrincipled")
+            principled_bsdf = self.get_nodes_with_type("BsdfPrincipled")[0]
+
             if len(principled_bsdf.inputs["Base Color"].links) == 1:
                 # get the node connected to the Base Color
                 socket_connected_to_the_base_color = principled_bsdf.inputs["Base Color"].links[0].from_socket
-                self.link(socket_connected_to_the_base_color, emission_node.inputs["Color"])
+                self.link(socket_connected_to_the_base_color, emission_node_bsdf.inputs["Base Color"])
+                # self.link(socket_connected_to_the_base_color, emission_node.inputs["Color"])
             else:
-                emission_node.inputs["Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
+                # emission_node.inputs["Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
+                emission_node_bsdf.inputs["Base Color"].default_value = principled_bsdf.inputs["Base Color"].default_value
         else:
-            emission_node.inputs["Color"].default_value = emission_color
+            emission_node_bsdf.inputs['Emission'].default_value = emission_color
+            # emission_node.inputs["Color"].default_value = emission_color
 
         # set the emission strength of the shader
-        emission_node.inputs['Strength'].default_value = emission_strength
+        emission_node_bsdf.inputs['Emission Strength'].default_value = emission_strength
+        # emission_node.inputs['Strength'].default_value = emission_strength
 
-        self.link(emission_node.outputs["Emission"], output_socket)
+        self.link(emission_node_bsdf.outputs["BSDF"], output_socket)
+        # self.link(emission_node.outputs["Emission"], output_socket)
 
     def set_principled_shader_value(self, input_name: str, value: Union[float, bpy.types.Image, bpy.types.NodeSocket]):
         """ Sets value of an input to the principled shader node.

@@ -21,7 +21,7 @@ class URDFObject(Entity):
     This class represents an URDF object, which is comprised of an armature and one or multiple links. Among others, it
     serves as an interface for manipulation of the URDF model.
     """
-    def __init__(self, armature: bpy.types.Armature, links: List[Link], xml_tree: Optional["urchin.URDF"] = None):
+    def __init__(self, armature: bpy.types.Armature, links: List[Link], xml_tree: Optional["urdfpy.URDF"] = None):
         super().__init__(bpy_object=armature)
 
         object.__setattr__(self, "links", links)
@@ -166,7 +166,7 @@ class URDFObject(Entity):
         matrices = []
         for link in self.links:
             if link.bone is not None:
-                matrices.append(Matrix(self.get_local2world_mat()) @ link.bone.matrix)
+                matrices.append(link.bone.matrix)
         return np.stack(matrices)
 
     def get_all_visual_local2world_mats(self) -> np.array:
@@ -174,23 +174,21 @@ class URDFObject(Entity):
 
         :return: Numpy array of shape (num_bones, 4, 4).
         """
-        return np.stack([link.get_visual_local2world_mats(Matrix(self.get_local2world_mat())) for link in self.links])
+        return np.stack([link.get_visual_local2world_mats() for link in self.links])
 
     def get_all_collision_local2world_mats(self) -> np.array:
         """ Returns all transformations from the world frame to the collision objects.
 
         :return: Numpy array of shape (num_bones, 4, 4).
         """
-        return np.stack([
-            link.get_collision_local2world_mats(Matrix(self.get_local2world_mat())) for link in self.links
-        ])
+        return np.stack([link.get_collision_local2world_mats() for link in self.links])
 
     def get_all_inertial_local2world_mats(self) -> np.array:
         """ Returns all transformations from the world frame to the inertial objects.
 
         :return: Numpy array of shape (num_bones, 4, 4).
         """
-        return np.stack([link.get_inertial_local2world_mat(Matrix(self.get_local2world_mat())) for link in self.links])
+        return np.stack([link.get_inertial_local2world_mat() for link in self.links])
 
     def _set_ik_bone_controller(self, bone: bpy.types.PoseBone):
         """ Sets the ik bone controller.

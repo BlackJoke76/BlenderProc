@@ -1,8 +1,7 @@
 """ All mesh objects are captured in this class. """
 
-from typing import List, Union, Tuple, Optional, Literal, Dict
+from typing import List, Union, Tuple, Optional
 from sys import platform
-from pathlib import Path
 
 import warnings
 import bpy
@@ -10,14 +9,12 @@ import numpy as np
 import bmesh
 import mathutils
 from mathutils import Vector, Matrix
-from trimesh import Trimesh
 
 from blenderproc.python.types.EntityUtility import Entity
 from blenderproc.python.utility.Utility import Utility, resolve_path
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 from blenderproc.python.types.MaterialUtility import Material
 from blenderproc.python.material import MaterialLoaderUtility
-from blenderproc.python.utility.SetupUtility import SetupUtility
 
 if platform != "win32":
     # this is only supported under linux and macOS, the import itself already doesn't work under windows
@@ -64,7 +61,6 @@ class MeshObject(Entity):
         """ Creates a new material and adds it to the object.
 
         :param name: The name of the new material.
-        :return: The new material.
         """
         new_mat = MaterialLoaderUtility.create(name)
         self.add_material(new_mat)
@@ -84,6 +80,25 @@ class MeshObject(Entity):
         # add the new one
         self.add_material(material)
 
+    def duplicate(self, duplicate_children: bool = True) -> "MeshObject":
+        """ Duplicates the object.
+
+        :param duplicate_children: If True, also all children objects are recursively duplicated.
+        :return: A new mesh object, which is a duplicate of this object.
+        """
+        new_entity = self.blender_obj.copy()
+        new_entity.data = self.blender_obj.data.copy()
+        bpy.context.collection.objects.link(new_entity)
+
+        duplicate_obj = MeshObject(new_entity)
+
+        if duplicate_children:
+            for child in self.get_children():
+                duplicate_child = child.duplicate(duplicate_children=duplicate_children)
+                duplicate_child.set_parent(duplicate_obj)
+
+        return duplicate_obj
+
     def get_mesh(self) -> bpy.types.Mesh:
         """ Returns the blender mesh of the object.
 
@@ -99,11 +114,14 @@ class MeshObject(Entity):
         """
         if mode.lower() == "flat":
             is_smooth = False
+            self.blender_obj.data.use_auto_smooth = False
         elif mode.lower() == "smooth":
             is_smooth = True
+            self.blender_obj.data.use_auto_smooth = False
         elif mode.lower() == "auto":
             is_smooth = True
-            self.add_auto_smooth_modifier(angle=angle_value)
+            self.blender_obj.data.use_auto_smooth = True
+            self.blender_obj.data.auto_smooth_angle = np.deg2rad(angle_value)
         else:
             raise RuntimeError(f"This shading mode is unknown: {mode}")
 
@@ -145,8 +163,8 @@ class MeshObject(Entity):
         :param rotation: Determines whether the object's rotation should be persisted.
         :param scale: Determines whether the object's scale should be persisted.
         """
-        with bpy.context.temp_override(selected_editable_objects=[self.blender_obj]):
-            bpy.ops.object.transform_apply(location=location, rotation=rotation, scale=scale)
+        bpy.ops.object.transform_apply({"selected_editable_objects": [self.blender_obj]}, location=location,
+                                       rotation=rotation, scale=scale)
 
     def get_origin(self) -> np.ndarray:
         """ Returns the origin of the object.
@@ -167,20 +185,23 @@ class MeshObject(Entity):
                      "CENTER_OF_MASS", "CENTER_OF_VOLUME"]
         :return: The new origin in world coordinates.
         """
-        with bpy.context.temp_override(selected_editable_objects=[self.blender_obj]):
-            if mode == "POINT":
-                if point is None:
-                    raise Exception("The parameter point is not given even though the mode is set to POINT.")
-                prev_cursor_location = bpy.context.scene.cursor.location.copy()
-                bpy.context.scene.cursor.location = point
-                bpy.ops.object.origin_set(type='ORIGIN_CURSOR')
-                bpy.context.scene.cursor.location = prev_cursor_location.copy()
-            elif mode == "CENTER_OF_MASS":
-                bpy.ops.object.origin_set(type='ORIGIN_CENTER_OF_MASS')
-            elif mode == "CENTER_OF_VOLUME":
-                bpy.ops.object.origin_set(type='ORIGIN_CENTER_OF_VOLUME')
-            else:
-                raise Exception("No such mode: " + mode)
+        context = {"selected_editable_objects": [self.blender_obj]}
+
+        if mode == "POINT":
+            if point is None:
+                raise Exception("The parameter point is not given even though the mode is set to POINT.")
+            prev_cursor_location = bpy.context.scene.cursor.location.copy()
+            bpy.context.scene.cursor.location = point
+            bpy.ops.object.origin_set(context, type='ORIGIN_CURSOR')
+            bpy.context.scene.cursor.location = prev_cursor_location.copy()
+        elif mode == "CENTER_OF_MASS":
+            bpy.ops.object.origin_set(context, type='ORIGIN_CENTER_OF_MASS')
+        elif mode == "CENTER_OF_VOLUME":
+            bpy.ops.object.origin_set(context, type='ORIGIN_CENTER_OF_VOLUME')
+        elif mode == "CENTER_OF_GEOMETRY":
+            bpy.ops.object.origin_set(context, type='ORIGIN_GEOMETRY')
+        else:
+            raise Exception("No such mode: " + mode)
 
         return self.get_origin()
 
@@ -207,8 +228,7 @@ class MeshObject(Entity):
         :param linear_damping: Amount of linear velocity that is lost over time.
         """
         # Enable rigid body component
-        with bpy.context.temp_override(object=self.blender_obj):
-            bpy.ops.rigidbody.object_add()
+        bpy.ops.rigidbody.object_add({'object': self.blender_obj})
         # Sett attributes
         rigid_body = self.blender_obj.rigid_body
         rigid_body.type = "ACTIVE" if active else "PASSIVE"
@@ -251,11 +271,17 @@ class MeshObject(Entity):
             part.enable_rigidbody(True, "CONVEX_HULL")
             part.hide()
 
+    def hide(self, hide_object: bool = True):
+        """ Sets the visibility of the object.
+
+        :param hide_object: Determines whether the object should be hidden in rendering.
+        """
+        self.blender_obj.hide_render = hide_object
+
     def disable_rigidbody(self):
         """ Disables the rigidbody element of the object """
         if self.has_rigidbody_enabled():
-            with bpy.context.temp_override(object=self.blender_obj):
-                bpy.ops.rigidbody.object_remove()
+            bpy.ops.rigidbody.object_remove({'object': self.blender_obj})
         else:
             warnings.warn(f"MeshObject {self.get_name()} has no rigid_body component enabled")
 
@@ -312,7 +338,7 @@ class MeshObject(Entity):
             bm = bmesh.from_edit_mesh(self.get_mesh())
         return bm
 
-    def update_from_bmesh(self, bm: bmesh.types.BMesh, free_bm_mesh=True):
+    def update_from_bmesh(self, bm: bmesh.types.BMesh, free_bm_mesh=True) -> bmesh.types.BMesh:
         """ Updates the object's mesh based on the given bmesh.
 
         :param bm: The bmesh to set.
@@ -341,14 +367,13 @@ class MeshObject(Entity):
         :param objects: List of objects which will be merged with this object
         """
         context = {}
-        context["object"] = context["active_object"] = self.blender_obj
         # save selection
+        context["object"] = context["active_object"] = self.blender_obj
         # select all objects which will be merged with the target
         context["selected_objects"] = context["selected_editable_objects"] = [obj.blender_obj for obj in objects] + \
                                                                              [self.blender_obj]
-        with bpy.context.temp_override(**context):
-            # execute the joining operation
-            bpy.ops.object.join()
+        # execute the joining operation
+        bpy.ops.object.join(context)
 
     def edit_mode(self):
         """ Switch into edit mode of this mesh object """
@@ -378,10 +403,8 @@ class MeshObject(Entity):
         bm.free()
         return bvh_tree
 
-    def position_is_above_object(self,
-                                 position: Union[Vector, np.ndarray],
-                                 down_direction: Union[Vector, np.ndarray] = None,
-                                 check_no_objects_in_between=True) -> bool:
+    def position_is_above_object(self, position: Union[Vector, np.ndarray],
+                                 down_direction: Union[Vector, np.ndarray] = None, check_no_objects_in_between=True):
         """ Make sure the given position is straight above the given object.
 
         If check_no_objects_in_between is True, this also checks that there are no other objects in between.
@@ -395,7 +418,9 @@ class MeshObject(Entity):
         """
         if down_direction is None:
             down_direction = [0, 0, -1]
-
+        
+        # this is because the obj of 3D-FRONT, there is a plane below the furniture
+        position[2] += 0.0005
         if check_no_objects_in_between:
             # Send a ray straight down and check if the first hit object is the query object
             hit, _, _, _, hit_object, _ = scene_ray_cast(position, down_direction)
@@ -407,7 +432,7 @@ class MeshObject(Entity):
                                                  world2local.to_3x3() @ Vector(down_direction))
         return hit
 
-    def ray_cast(self,origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
+    def ray_cast(self, origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                  max_distance: float = 1.70141e+38) -> Tuple[bool, np.ndarray, np.ndarray, int]:
         """ Cast a ray onto evaluated geometry, in object space.
 
@@ -431,7 +456,6 @@ class MeshObject(Entity):
         """
         if not self.has_uv_mapping() or overwrite:
             self.edit_mode()
-            bpy.ops.mesh.select_all(action='SELECT')
             if projection == "cube":
                 bpy.ops.uv.cube_project()
             elif projection == "cylinder":
@@ -445,11 +469,8 @@ class MeshObject(Entity):
                                    f"'smart' or 'sphere'.")
             self.object_mode()
 
-    def has_uv_mapping(self) -> bool:
-        """ Returns whether the mesh object has a valid uv mapping.
-
-        :return: True if the object has a valid uv mapping.
-        """
+    def has_uv_mapping(self):
+        """ Returns whether the mesh object has a valid uv mapping. """
         if len(self.blender_obj.data.uv_layers) > 1:
             raise Exception("This only support objects which only have one uv layer.")
         for layer in self.blender_obj.data.uv_layers:
@@ -473,7 +494,7 @@ class MeshObject(Entity):
             uv_layer.data[loop.index].uv *= factor
 
     def add_displace_modifier(self, texture: bpy.types.Texture, mid_level: float = 0.5, strength: float = 0.1,
-                              min_vertices_for_subdiv: int = 10000, subdiv_level: int = 2) -> bpy.types.Modifier:
+                              min_vertices_for_subdiv: int = 10000, subdiv_level: int = 2):
         """ Adds a displace modifier with a texture to an object.
 
         If the mesh has less than min_vertices_for_subdiv vertices, also a subdivision modifier is added.
@@ -484,137 +505,142 @@ class MeshObject(Entity):
         :param min_vertices_for_subdiv: Checks if a subdivision is necessary. If the vertices of a object are less than
                                         'min_vertices_for_subdiv' a Subdivision modifier will be add to the object.
         :param subdiv_level:  Numbers of Subdivisions to perform when rendering. Parameter of Subdivision modifier.
-        :return: The added displace modifier.
         """
-        # Add a subdivision modifier, if the mesh has too few vertices.
+        # Add a subdivision modifier, if the mesh has too less vertices.
         if not len(self.get_mesh().vertices) > min_vertices_for_subdiv:
             self.add_modifier("SUBSURF", render_levels=subdiv_level)
 
         # Add the displacement modifier
-        return self.add_modifier("DISPLACE", texture=texture, mid_level=mid_level, strength=strength)
+        self.add_modifier("DISPLACE", texture=texture, mid_level=mid_level, strength=strength)
 
-    def add_modifier(self, name: str, **kwargs) -> bpy.types.Modifier:
+    def add_modifier(self, name: str, **kwargs):
         """ Adds a new modifier to the object.
 
         :param name: The name/type of the modifier to add.
         :param kwargs: Additional attributes that should be set to the modifier.
-        :return: The added modifier.
         """
         # Create the new modifier
-        with bpy.context.temp_override(object=self.blender_obj):
-            bpy.ops.object.modifier_add(type=name)
-
+        bpy.ops.object.modifier_add({"object": self.blender_obj}, type=name)
         # Set the attributes
         modifier = self.blender_obj.modifiers[-1]
         for key, value in kwargs.items():
             setattr(modifier, key, value)
-        return modifier
 
-    def get_modifiers(self) -> Dict[str, bpy.types.Modifier] | List[bpy.types.Modifier]:
-        """ Returns all modifiers of the object.
+    def surface_area(self):
+        def get_unit(unit_system: str, unit: str) -> tuple[float, str]:
+        # Returns unit length relative to meter and unit symbol
 
-        Note: The actual type is `bpy_prop_collection` but it is not directly accessible in the Blender API.
+            units = {
+                "METRIC": {
+                    "KILOMETERS": (1000.0, "km"),
+                    "METERS": (1.0, "m"),
+                    "CENTIMETERS": (0.01, "cm"),
+                    "MILLIMETERS": (0.001, "mm"),
+                    "MICROMETERS": (0.000001, "µm"),
+                },
+                "IMPERIAL": {
+                    "MILES": (1609.344, "mi"),
+                    "FEET": (0.3048, "\'"),
+                    "INCHES": (0.0254, "\""),
+                    "THOU": (0.0000254, "thou"),
+                },
+            }
 
-        :return: The modifiers of the object.
-        """
-        return self.blender_obj.modifiers
+            try:
+                return units[unit_system][unit]
+            except KeyError:
+                fallback_unit = "CENTIMETERS" if unit_system == "METRIC" else "INCHES"
+                return units[unit_system][fallback_unit]
 
-    def get_modifier(self, name: str) -> bpy.types.Modifier:
-        """ Returns the modifier with the given name.
+        def clean_float(value: float, precision: int = 0) -> str:
+            # Avoid scientific notation and strip trailing zeros: 0.000 -> 0.0
 
-        :param name: The name of the modifier.
-        :return: The modifier.
-        """
-        return self.get_modifiers().get(name)
+            text = f"{value:.{precision}f}"
+            index = text.rfind(".")
 
-    def add_geometry_nodes(self) -> bpy.types.GeometryNodeTree:
-        """ Adds a new geometry nodes modifier to the object.
+            if index != -1:
+                index += 2
+                head, tail = text[:index], text[index:]
+                tail = tail.rstrip("0")
+                text = head + tail
 
-        :return: The node group of the added geometry nodes modifier.
-        """
-        # Create the new modifier
-        with bpy.context.temp_override(object=self.blender_obj):
-            bpy.ops.node.new_geometry_nodes_modifier()
-        modifier = self.blender_obj.modifiers[-1]
-        return modifier.node_group
+            return text
 
-    def add_auto_smooth_modifier(self, angle: float = 30.0) -> bpy.types.Modifier:
-        """ Adds the 'Smooth by Angle' geometry nodes modifier.
-        
-        This replaces the 'Auto Smooth' behavior available in Blender before 4.1.
+        def bmesh_copy_from_object(obj, transform=True, triangulate=True, apply_modifiers=False):
+            """Returns a transformed, triangulated copy of the mesh"""
 
-        :param angle: Maximum angle (in degrees) between face normals that will be considered as smooth.
-        :return: The added smooth-by-angle modifier.
-        """
-        # The bpy.ops.object.modifier_add_node_group doesn't work in background mode :( 
-        # So we load the node group and create the modifier ourselves.
-        # Known issue: https://projects.blender.org/blender/blender/issues/117399
+            assert obj.type == 'MESH'
 
-        # The datafiles are expected to be in the same folder relative to blender's python binary.
-        path = Path(bpy.utils.resource_path('LOCAL')) / "datafiles" / "assets" / "geometry_nodes" / "smooth_by_angle.blend"
-        if not path.exists():
-            raise RuntimeError(f"Could not find the path to the 'ESSENTIALS' asset folder expected at {path}")
-        
-        # Get the node group from the current file (reuse if it exists), otherwise load it from the
-        # precalculated path and append to the current .blend.
-        smooth_by_angle_node_group_name = "Smooth by Angle"
-        existing_node_group = bpy.data.node_groups.get(smooth_by_angle_node_group_name, None)
-        if existing_node_group is None:
-            with bpy.data.libraries.load(str(path), link=False) as (data_from, data_to):
-                data_to.node_groups = [smooth_by_angle_node_group_name]
-            existing_node_group = data_to.node_groups[0]
+            if apply_modifiers and obj.modifiers:
+                import bpy
+                depsgraph = bpy.context.evaluated_depsgraph_get()
+                obj_eval = obj.evaluated_get(depsgraph)
+                me = obj_eval.to_mesh()
+                bm = bmesh.new()
+                bm.from_mesh(me)
+                obj_eval.to_mesh_clear()
+            else:
+                me = obj.data
+                if obj.mode == 'EDIT':
+                    bm_orig = bmesh.from_edit_mesh(me)
+                    bm = bm_orig.copy()
+                else:
+                    bm = bmesh.new()
+                    bm.from_mesh(me)
 
-        # Check if the modifier already exists
-        modifier = None
-        for existing_mod in self.get_modifiers():
-            if existing_mod.type == 'NODES' and existing_mod.node_group == existing_node_group:
-                modifier = modifier
-                break
-        
-        # Create a new modifier if no existing modifier was found
-        if modifier is None:
-            modifier = self.blender_obj.modifiers.new(name=smooth_by_angle_node_group_name, type='NODES')
-            modifier.node_group = existing_node_group
+            # TODO. remove all customdata layers.
+            # would save ram
 
-        modifier = self.get_modifier("Smooth by Angle")
-        modifier["Input_1"] = np.deg2rad(float(angle))
-        return modifier
+            if transform:
+                matrix = obj.matrix_world.copy()
+                if not matrix.is_identity:
+                    bm.transform(matrix)
+                    # Update normals if the matrix has no rotation.
+                    matrix.translation.zero()
+                    if not matrix.is_identity:
+                        bm.normal_update()
 
-    def mesh_as_trimesh(self) -> Trimesh:
-         """ Returns a trimesh.Trimesh instance of the MeshObject.
-    
-         :return: The object as trimesh.Trimesh.
-         """
-    
-         # get mesh data
-         mesh = self.get_mesh()
-         
-         # check if faces are pure tris or quads and triangulate quads if this is not the case
-         if not all(len(f.vertices[:]) == len(mesh.polygons[0].vertices[:]) for f in mesh.polygons):
-             # Triangulate quads
-             self.select()
-             bpy.ops.object.mode_set(mode='EDIT')
-             bpy.ops.mesh.select_all(action='SELECT')
-             bpy.ops.mesh.quads_convert_to_tris(quad_method='FIXED', ngon_method='BEAUTY') 
-             bpy.ops.object.mode_set(mode='OBJECT')
-             self.deselect()
-         
-         # get vertices 
-         verts = np.array([[v.co[0], v.co[1], v.co[2]] for v in mesh.vertices])
-         # re-scale the vertices since scale operations doesn't apply to the mesh data
-         verts *= self.blender_obj.scale
-         # get faces   
-         faces = np.array([f.vertices[:] for f in mesh.polygons if len(f.vertices[:]) in [3, 4]])
-    
-         return Trimesh(vertices=verts, faces=faces)
+            if triangulate:
+                bmesh.ops.triangulate(bm, faces=bm.faces)
 
-    def clear_custom_splitnormals(self):
-        """ Removes custom split normals which might exist after importing the object from file. """
+            return bm
 
-        with bpy.context.temp_override(object=self.blender_obj):
-            bpy.ops.mesh.customdata_custom_splitnormals_clear()
 
-def create_from_blender_mesh(blender_mesh: bpy.types.Mesh, object_name: str = None) -> MeshObject:
+        def bmesh_calc_area(bm):
+            """Calculate the surface area."""
+            return sum(f.calc_area() for f in bm.faces)
+        scene = bpy.context.scene
+        unit = scene.unit_settings
+        scale = 1.0 if unit.system == 'NONE' else unit.scale_length
+
+        total_area = 0
+        if self.has_cp("my_parent"):
+            objs = get_all_mesh_objects()
+            for obj in objs:
+                if(obj.has_cp("my_parent") and obj.get_cp("my_parent") == self.get_cp("my_parent")):
+                    bm = bmesh_copy_from_object(obj.blender_obj, apply_modifiers=True)
+                    area = bmesh_calc_area(bm) 
+                    bm.free()
+                    total_area += area
+        else:
+            bm = bmesh_copy_from_object(self.blender_obj, apply_modifiers=True)
+            total_area = bmesh_calc_area(bm)
+            bm.free()
+
+        if unit.system == 'NONE':
+            area_fmt = clean_float(total_area, 8)
+        else:
+            length, symbol = get_unit(unit.system, unit.length_unit)
+
+            area_unit = total_area * (scale ** 2.0) / (length ** 2.0)
+            area_str = clean_float(area_unit, 4)
+            area_fmt = f"{area_str} {symbol}"
+
+        return area_unit
+
+
+
+def create_from_blender_mesh(blender_mesh: bpy.types.Mesh, object_name: str = None) -> "MeshObject":
     """ Creates a new Mesh object using the given blender mesh.
 
     :param blender_mesh: The blender mesh.
@@ -628,7 +654,7 @@ def create_from_blender_mesh(blender_mesh: bpy.types.Mesh, object_name: str = No
     return MeshObject(obj)
 
 
-def create_with_empty_mesh(object_name: str, mesh_name: str = None) -> MeshObject:
+def create_with_empty_mesh(object_name: str, mesh_name: str = None) -> "MeshObject":
     """ Creates an object with an empty mesh.
     :param object_name: The name of the new object.
     :param mesh_name: The name of the contained blender mesh. If None is given, the object name is used.
@@ -638,59 +664,13 @@ def create_with_empty_mesh(object_name: str, mesh_name: str = None) -> MeshObjec
         mesh_name = object_name
     return create_from_blender_mesh(bpy.data.meshes.new(mesh_name), object_name)
 
-def create_from_point_cloud(points: np.ndarray,
-                            object_name: str,
-                            add_geometry_nodes_visualization: bool = False,
-                            point_size: float = 0.015,
-                            point_color: Tuple[float, float, float] = (1, 0, 0)) -> MeshObject:
-    """ Create a mesh from a point cloud.
 
-    The mesh's vertices are filled with the points from the given point cloud.
-
-    :param points: The points of the point cloud. Should be in shape [N, 3]
-    :param object_name: The name of the new object.
-    :param add_geometry_nodes_visualization: If yes, a geometry nodes modifier is added, 
-                                             which adds a sphere to every point. In this way, 
-                                             the point cloud will appear in renderings.
-    :param point_size: The size of the spheres that are added to the points.
-    :param point_color: The color of the spheres that are added to the points.
-    :return: The new Mesh object.
-    """
-
-    # Create point cloud object and fill it with the given points
-    point_cloud = create_with_empty_mesh(object_name)
-    point_cloud.get_mesh().from_pydata(points, [], [])
-    point_cloud.get_mesh().validate()
-
-    # If desired, add geometry nodes that add a icosphere instance to every point
-    if add_geometry_nodes_visualization:
-        # Make nodes
-        geometry_nodes = point_cloud.add_geometry_nodes()
-        mesh_to_points_node = geometry_nodes.nodes.new(type='GeometryNodeMeshToPoints')
-        mesh_to_points_node.inputs['Radius'].default_value = point_size
-
-        # Material setup
-        material_node = geometry_nodes.nodes.new("GeometryNodeSetMaterial")
-        mat = point_cloud.new_material("point_cloud_mat")
-        mat.set_principled_shader_value("Base Color", [*point_color, 1])
-        material_node.inputs["Material"].default_value = mat.blender_obj
-
-        # Link nodes
-        input_node = Utility.get_the_one_node_with_type(geometry_nodes.nodes, "NodeGroupInput")
-        output_node = Utility.get_the_one_node_with_type(geometry_nodes.nodes, "NodeGroupOutput")
-        geometry_nodes.links.new(input_node.outputs['Geometry'], mesh_to_points_node.inputs['Mesh'])
-        geometry_nodes.links.new(mesh_to_points_node.outputs['Points'], material_node.inputs['Geometry'])
-        geometry_nodes.links.new(material_node.outputs['Geometry'], output_node.inputs['Geometry'])
-
-    return point_cloud
-
-
-def create_primitive(shape: Literal["CUBE", "CYLINDER", "CONE", "PLANE", "SPHERE", "UV_SPHERE", "ICO_SPHERE", "MONKEY"],
-                     **kwargs) -> MeshObject:
+def create_primitive(shape: str, **kwargs) -> "MeshObject":
     """ Creates a new primitive mesh object.
 
-    :param shape: The name of the primitive to create.
-    :return: The newly created MeshObject.
+    :param shape: The name of the primitive to create. Available: ["CUBE", "CYLINDER", "CONE", "PLANE",
+                  "SPHERE", "MONKEY"]
+    :return: The newly created MeshObject
     """
     if shape == "CUBE":
         bpy.ops.mesh.primitive_cube_add(**kwargs)
@@ -700,11 +680,9 @@ def create_primitive(shape: Literal["CUBE", "CYLINDER", "CONE", "PLANE", "SPHERE
         bpy.ops.mesh.primitive_cone_add(**kwargs)
     elif shape == "PLANE":
         bpy.ops.mesh.primitive_plane_add(**kwargs)
-    elif shape in ["SPHERE", "UV_SPHERE"]:
+    elif shape == "SPHERE":
         bpy.ops.mesh.primitive_uv_sphere_add(**kwargs)
-    elif shape == "ICO_SPHERE":
-        bpy.ops.mesh.primitive_ico_sphere_add(**kwargs)
-    elif shape in ["MONKEY", "SUZANNE"]:
+    elif shape == "MONKEY":
         bpy.ops.mesh.primitive_monkey_add(**kwargs)
     else:
         raise Exception("No such shape: " + shape)
@@ -755,14 +733,13 @@ def create_bvh_tree_multi_objects(mesh_objects: List[MeshObject]) -> mathutils.b
     bm = bmesh.new()
     # Go through all mesh objects
     for obj in mesh_objects:
-        # Get a copy of the mesh
-        mesh = obj.get_mesh().copy()
-        # Apply world matrix 
-        mesh.transform(Matrix(obj.get_local2world_mat()))
-        # Add object mesh to bmesh
-        bm.from_mesh(mesh)
-        # Avoid leaving orphan mesh
-        bpy.data.meshes.remove(mesh)
+        # Add object mesh to bmesh (the newly added vertices will be automatically selected)
+        bm.from_mesh(obj.get_mesh())
+        # Apply world matrix to all selected vertices
+        bm.transform(Matrix(obj.get_local2world_mat()), filter={"SELECT"})
+        # Deselect all vertices
+        for v in bm.verts:
+            v.select = False
 
     # Create tree from bmesh
     bvh_tree = mathutils.bvhtree.BVHTree.FromBMesh(bm)
@@ -795,7 +772,7 @@ def compute_poi(objects: List[MeshObject]) -> np.ndarray:
 
 def scene_ray_cast(origin: Union[Vector, list, np.ndarray], direction: Union[Vector, list, np.ndarray],
                    max_distance: float = 1.70141e+38) -> Tuple[
-bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
+    bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
     """ Cast a ray onto all geometry from the scene, in world space.
 
    :param origin: Origin of the ray, in world space.
@@ -814,3 +791,4 @@ bool, np.ndarray, np.ndarray, int, MeshObject, np.ndarray]:
     if hit_object is not None:
         hit_object = MeshObject(hit_object)
     return hit, np.array(location), np.array(normal), index, hit_object, np.array(matrix)
+

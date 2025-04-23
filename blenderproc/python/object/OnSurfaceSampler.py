@@ -20,8 +20,7 @@ def sample_poses_on_surface(objects_to_sample: List[MeshObject], surface: MeshOb
     and possible non-alignment of the sampling surface (i.e. on the X-Y hyperplane, can be somewhat mitigated with
     precise "up_direction" value), which leads to the objects hovering slightly above the surface. So it is
     recommended to use the PhysicsPositioning module afterwards for realistically looking placements of objects on
-    the sampling surface. If placing fails due to collisions, the object will be moved back to the intial pose
-    and hidden from rendering.
+    the sampling surface.
 
     :param objects_to_sample: A list of objects that should be sampled above the surface.
     :param surface: Object to place objects_to_sample on.
@@ -34,10 +33,6 @@ def sample_poses_on_surface(objects_to_sample: List[MeshObject], surface: MeshOb
                                               else only the center of the object has to be above the surface
     :return: The list of placed objects.
     """
-    if len(set(objects_to_sample)) != len(objects_to_sample):
-        raise ValueError("The given list of objects to sample contains duplicates. "
-                         "This leads to complications in the sampling process.")
-
     if up_direction is None:
         up_direction = np.array([0., 0., 1.])
     else:
@@ -52,11 +47,14 @@ def sample_poses_on_surface(objects_to_sample: List[MeshObject], surface: MeshOb
     placed_objects: List[MeshObject] = []
     for obj in objects_to_sample:
         print(f"Trying to put {obj.get_name()}")
-        initial_pose = obj.get_local2world_mat()
+
         placed_successfully = False
 
         for i in range(max_tries):
-            sample_pose_func(obj)
+            if(len(placed_objects) == 0):
+                sample_pose_func(obj, None)
+            else:
+                sample_pose_func(obj, placed_objects[-1])
             # Remove bvh cache, as object has changed
             if obj.get_name() in bvh_cache:
                 del bvh_cache[obj.get_name()]
@@ -82,20 +80,67 @@ def sample_poses_on_surface(objects_to_sample: List[MeshObject], surface: MeshOb
                 print("Bad spacing after drop, retrying!")
                 continue
 
+            print(obj.get_location())
+            print("-------------------------------------------------------------location")
             if not CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
-                print("Collision detected after drop, retrying!")
-                continue
+                step = 0.2
+                collision = True
+                location = obj.get_location()
+                for count in range(200):
+                    obj.set_location(mathutils.Vector((location[0] + step, location[1], location[2])))
+                    if obj.get_name() in bvh_cache:
+                        del bvh_cache[obj.get_name()]
+                    if CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
+                        collision = False
+                        break
 
+                    obj.set_location(mathutils.Vector((location[0] - step, location[1], location[2])))
+                    if obj.get_name() in bvh_cache:
+                        del bvh_cache[obj.get_name()]
+                    if CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
+                        collision = False
+                        break
+
+                    obj.set_location(mathutils.Vector((location[0], location[1] + step, location[2])))
+                    if obj.get_name() in bvh_cache:
+                        del bvh_cache[obj.get_name()]
+                    if CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
+                        collision = False
+                        break
+
+                    obj.set_location(mathutils.Vector((location[0], location[1] - step, location[2])))
+                    if obj.get_name() in bvh_cache:
+                        del bvh_cache[obj.get_name()]
+                    if CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
+                        collision = False
+                        break
+
+                    step += 0.15
+                    print("Collision detected after move, retrying!")
+                if(collision):
+                    print("Collision detected after drop, retrying!")
+                    continue
+
+            if obj.get_name() in bvh_cache:
+                del bvh_cache[obj.get_name()]
+
+            if not CollisionUtility.check_intersections(obj, bvh_cache, placed_objects, []):
+                for ele in placed_objects:
+                    print(f"{ele.get_name()}:{ele.get_location()}")
+                print("-----------------------------------------------------------final_move")
+                print("Collision detected after final_move, retrying!")
+                continue
+            
             print(f"Placed object \"{obj.get_name()}\" successfully at {obj.get_location()} after {i + 1} iterations!")
             placed_objects.append(obj)
-
+            for ele in placed_objects:
+                print(f"{ele.get_name()}:{ele.get_location()}")
             placed_successfully = True
             break
 
         if not placed_successfully:
-            print(f"Giving up on {obj.get_name()}, hiding...")
-            obj.hide(True)
-            obj.set_local2world_mat(initial_pose)
+            print(f"Giving up on {obj.get_name()}, deleting...")
+            obj.delete()
 
     return placed_objects
 

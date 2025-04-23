@@ -63,7 +63,7 @@ def replace_objects(objects_to_be_replaced: List[MeshObject], objects_to_replace
 
                 # Copy properties to the newly duplicated object
                 if copy_properties:
-                    for key, value in current_object_to_be_replaced.get_all_cps().items():
+                    for key, value in current_object_to_be_replaced.get_all_cps():
                         duplicate_new_object.set_cp(key, value)
 
                 duplicate_new_object.hide(False)
@@ -91,7 +91,7 @@ class _ObjectReplacer:
 
         :param bb1: bounding box 1. Type: float multi-dimensional array of 8 * 3.
         :param bb2: bounding box 2. Type: float multi-dimensional array of 8 * 3.
-        :return: the ratio between each side of the bounding box. Type: a list of floats.
+        returns the ratio between each side of the bounding box. Type: a list of floats.
         """
         ratio_a = (bb1[0, 0] - bb1[4, 0]) / (bb2[0, 0] - bb2[4, 0])
         ratio_b = (bb1[0, 1] - bb1[3, 1]) / (bb2[0, 1] - bb2[3, 1])

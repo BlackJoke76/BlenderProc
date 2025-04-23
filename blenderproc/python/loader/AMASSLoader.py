@@ -208,9 +208,7 @@ class _AMASSLoader:
         if not os.path.exists(bm_path) or not os.path.exists(dmpl_path):
             raise FileNotFoundError("Parametric Body model doesn't exist, please follow download "
                                     "instructions section in AMASS Example")
-        # pylint: disable=no-member
         comp_device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        #pylint: enable=no-member
         body_model = BodyModel(bm_path=bm_path, num_betas=num_betas, num_dmpls=num_dmpls,
                                path_dmpl=dmpl_path).to(comp_device)
         faces = body_model.f.detach().cpu().numpy()
@@ -285,15 +283,13 @@ class _AMASSLoader:
                 skin_tone_fac = random.uniform(0.0, 1)
                 skin_tone_rgb = [value * skin_tone_fac for value in skin_tone_rgb]
                 principled_bsdf.inputs["Base Color"].default_value = mathutils.Vector([*skin_tone_rgb, 1.0])
-
-                principled_bsdf.subsurface_method = "RANDOM_WALK_SKIN"
-                principled_bsdf.inputs["Subsurface Weight"].default_value = 1
-                principled_bsdf.inputs["Subsurface Scale"].default_value = 0.2
+                principled_bsdf.inputs["Subsurface"].default_value = 0.2
+                principled_bsdf.inputs["Subsurface Color"].default_value = mathutils.Vector([*skin_tone_rgb, 1.0])
                 principled_bsdf.inputs["Subsurface Radius"].default_value = mathutils.Vector([1.0, 0.2, 0.1])
                 principled_bsdf.inputs["Subsurface IOR"].default_value = 2.5
 
                 # darker skin looks better when made less specular
-                principled_bsdf.inputs["Specular IOR Level"].default_value = np.mean(skin_tone_rgb) / 255.0
+                principled_bsdf.inputs["Specular"].default_value = np.mean(skin_tone_rgb) / 255.0
 
                 texture_nodes = material.get_nodes_with_type("ShaderNodeTexImage")
                 if texture_nodes and len(texture_nodes) > 1:

@@ -16,7 +16,7 @@ import yaml
 import bpy
 from scipy.ndimage import map_coordinates
 
-from blenderproc.python.utility.GlobalStorage import GlobalStorage
+from blenderproc.python.modules.main.GlobalStorage import GlobalStorage
 from blenderproc.python.camera import CameraUtility
 from blenderproc.python.utility.MathUtility import change_source_coordinate_frame_of_transformation_matrix
 
@@ -114,7 +114,7 @@ def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, 
     it = 0
     while res[-1] > 0.15:
         r2 = np.square(x) + np.square(y)
-        radial_part = 1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2
+        radial_part = (1 + k1 * r2 + k2 * r2 * r2 + k3 * r2 * r2 * r2)
         x_ = x * radial_part + 2 * p2 * x * y + p1 * (r2 + 2 * np.square(x))
         y_ = y * radial_part + 2 * p1 * x * y + p2 * (r2 + 2 * np.square(y))
 
@@ -152,8 +152,8 @@ def set_lens_distortion(k1: float, k2: float, k3: float = 0.0, p1: float = 0.0, 
 
     # u and v are now the pixel coordinates on the undistorted image that
     # will distort into the row,column coordinates of the distorted image
-    u = fx * x + cx
-    v = fy * y + cy
+    u = (fx * x + cx)
+    v = (fy * y + cy)
 
     # Stacking this way for the interpolation in the undistorted image array
     mapping_coords = np.vstack([v, u])
@@ -246,7 +246,7 @@ def apply_lens_distortion(image: Union[List[np.ndarray], np.ndarray],
             amount_of_output_channels = input_image.shape[2]
         image_distorted = np.zeros((orig_res_y, orig_res_x, amount_of_output_channels))
         used_dtpye = input_image.dtype
-        data = input_image.astype(np.float32)
+        data = input_image.astype(np.float)
         # Forward mapping in order to distort the undistorted image coordinates
         # and reshape the arrays into the image shape grid.
         # The reference frame for coords is as in DLR CalDe etc. (the upper-left pixel center is at [0,0])

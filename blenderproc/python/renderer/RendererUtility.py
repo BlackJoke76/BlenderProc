@@ -1,9 +1,7 @@
 """Provides functionality to render a color, normal, depth and distance image."""
 
-from contextlib import contextmanager
 import os
-import threading
-from typing import IO, Union, Dict, List, Set, Optional, Any
+from typing import Union, Dict, List, Set, Optional, Any
 import math
 import sys
 import platform
@@ -12,14 +10,12 @@ import time
 import mathutils
 import bpy
 import numpy as np
-from rich.console import Console
-from rich.progress import Progress, TextColumn, BarColumn, TimeRemainingColumn
 
 from blenderproc.python.camera import CameraUtility
-from blenderproc.python.utility.GlobalStorage import GlobalStorage
+from blenderproc.python.modules.main.GlobalStorage import GlobalStorage
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 from blenderproc.python.utility.DefaultConfig import DefaultConfig
-from blenderproc.python.utility.Utility import Utility, stdout_redirected
+from blenderproc.python.utility.Utility import Utility
 from blenderproc.python.writer.WriterUtility import _WriterUtility
 
 
@@ -123,16 +119,6 @@ def toggle_stereo(enable: bool):
     if enable:
         bpy.context.scene.render.views_format = "STEREO_3D"
 
-def toggle_light_tree(enable: bool):
-    """ Enables/Disables blender's light tree for rendering.
-
-    Enabling the light tree reduces the noise in scenes with many point lights,
-    however it increases the render time per sample.
-    See https://wiki.blender.org/wiki/Reference/Release_Notes/3.5/Cycles
-
-    :param enable: True, if light tree should be enabled.
-    """
-    bpy.context.scene.cycles.use_light_tree = enable
 
 def set_simplify_subdivision_render(simplify_subdivision_render: int):
     """ Sets global maximum subdivision level during rendering to speedup rendering.
@@ -230,6 +216,7 @@ def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str
     mapper_node.inputs['From Max'].default_value = 1.0
     mapper_node.inputs['To Min'].default_value = 0
     mapper_node.inputs['To Max'].default_value = antialiasing_distance_max
+    final_output = mapper_node.outputs['Value']
 
     # Build output node
     output_file = tree.nodes.new("CompositorNodeOutputFile")
@@ -237,15 +224,8 @@ def enable_distance_output(activate_antialiasing: bool, output_dir: Optional[str
     output_file.format.file_format = "OPEN_EXR"
     output_file.file_slots.values()[0].path = file_prefix
 
-    # Feed the output through 'Combine Color' node, to create 3 channel RGB grayscale image as a lot of
-    # EXR readers don't support single float channel EXR files and Blender writes depth as a single
-    # channel since version 4.1.1 by default.
-    combine_color = tree.nodes.new("CompositorNodeCombineColor")
-    combine_color.mode = "HSV"
-    links.new(mapper_node.outputs["Value"], combine_color.inputs[2])
-    
     # Feed the Z-Buffer or Mist output of the render layer to the input of the file IO layer
-    links.new(combine_color.outputs["Image"], output_file.inputs['Image'])
+    links.new(final_output, output_file.inputs['Image'])
 
     Utility.add_output_entry({
         "key": output_key,
@@ -305,15 +285,8 @@ def enable_depth_output(activate_antialiasing: bool, output_dir: Optional[str] =
     output_file.format.file_format = "OPEN_EXR"
     output_file.file_slots.values()[0].path = file_prefix
 
-    # Feed the output through 'Combine Color' node, to create 3 channel RGB grayscale image as a lot of
-    # EXR readers don't support single float channel EXR files and Blender writes depth as a single
-    # channel since version 4.1.1 by default
-    combine_color = tree.nodes.new("CompositorNodeCombineColor")
-    combine_color.mode = "HSV"
-    links.new(render_layer_node.outputs["Depth"], combine_color.inputs[2])
-    
-    # Feed the Z-Buffer RGB output from the Combine Color node to the input of the file IO layer
-    links.new(combine_color.outputs["Image"], output_file.inputs["Image"])
+    # Feed the Z-Buffer output of the render layer to the input of the file IO layer
+    links.new(render_layer_node.outputs["Depth"], output_file.inputs['Image'])
 
     Utility.add_output_entry({
         "key": output_key,
@@ -495,14 +468,7 @@ def enable_segmentation_output(map_by: Union[str, List[str]] = "category_id",
         "semantic_segmentation_default_values": default_values
     })
 
-    # Feed the output through 'Combine Color' node, to create 3 channel RGB grayscale image as a lot of
-    # EXR readers don't support single float channel EXR files and Blender writes depth as a single
-    # channel since version 4.1.1 by default
-    combine_color = tree.nodes.new("CompositorNodeCombineColor")
-    combine_color.mode = "HSV"
-    links.new(render_layer_node.outputs["IndexOB"], combine_color.inputs[2])
-    
-    links.new(combine_color.outputs["Image"], output_node.inputs["Image"])
+    links.new(render_layer_node.outputs["IndexOB"], output_node.inputs["Image"])
 
     # set the threshold low to avoid noise in alpha materials
     bpy.context.scene.view_layers["ViewLayer"].pass_alpha_threshold = pass_alpha_threshold
@@ -558,103 +524,12 @@ def map_file_format_to_file_ending(file_format: str) -> str:
     raise RuntimeError(f"Unknown Image Type {file_format}")
 
 
-def _progress_bar_thread(pipe_out: int, stdout: IO, total_frames: int, num_samples: int):
-    """ The thread rendering the progress bar
-
-    :param pipe_out: The pipe output delivering blenders debug messages.
-    :param stdout: The stdout to which the progress bar should be written.
-    :param total_frames: The number of frames that should be rendered.
-    :param num_samples: The number of samples used to render each frame.
-    """
-    # Define columns for progress bar
-    columns = [
-        TextColumn("[progress.description]{task.description}"),
-        BarColumn(),
-        TimeRemainingColumn(),
-        TextColumn("[progress.description]{task.fields[status]}"),
-    ]
-    # Initializes progress bar using given stdout
-    with Progress(*columns, console=Console(file=stdout), transient=True) as progress:
-        complete_task = progress.add_task("[green]Total", total=total_frames, status="")
-        frame_task = progress.add_task("[yellow]Current frame", total=num_samples, status="")
-
-        # Continuously read blenders debug messages
-        current_line = ""
-        starting_frame_number = bpy.context.scene.frame_start
-        while True:
-            # Read the next character
-            char = os.read(pipe_out, 1)
-            if not char:
-                break
-            char = chr(char[0])
-            # If its the ending character, stop
-            if not char or "\b" == char:
-                break
-            # If the current line has ended
-            if char == "\n":
-                # Check if its a line we can use (starts with "Fra:")
-                if current_line.startswith("Fra:"):
-                    # Extract current frame number and use it to set the progress bar
-                    frame_number = int(current_line.split()[0][len("Fra:"):])
-                    frames_completed = frame_number - starting_frame_number
-                    progress.update(complete_task, completed=frames_completed)
-                    progress.update(complete_task, status=f"Rendering frame {frames_completed + 1} of {total_frames}")
-
-                    # Split line into columns
-                    status_columns = [col.strip() for col in current_line.split("|")]
-                    if "Scene, ViewLayer" in status_columns:
-                        # If we are currently at "Scene, ViewLayer", use everything afterwards
-                        status = " | ".join(status_columns[status_columns.index("Scene, ViewLayer") + 1:])
-                        # If we are currently rendering, update the progress
-                        if status.startswith("Sample"):
-                            progress.update(frame_task, completed=int(status[len("Sample"):].split("/", maxsplit=1)[0]))
-                    elif "Compositing" in status_columns:
-                        # If we are at "Compositing", use everything afterwards including "Compositing"
-                        status = " | ".join(status_columns[status_columns.index("Compositing"):])
-                        # Set render progress to complete
-                        progress.update(frame_task, completed=num_samples)
-                    else:
-                        # In every other case, use last column
-                        status = status_columns[-1]
-                    # Set status to progress bar
-                    progress.update(frame_task, status=status)
-                # Start with next line
-                current_line = ""
-            else:
-                # Append char to current line
-                current_line += char
-
-
-@contextmanager
-def _render_progress_bar(pipe_out: int, pipe_in: int, stdout: IO, total_frames: int, enabled: bool = True):
-    """ Shows a progress bar visualizing the render progress.
-
-    :param pipe_out: The pipe output delivering blenders debug messages.
-    :param pipe_in: The input of the pipe, necessary to send the end character.
-    :param stdout: The stdout to which the progress bar should be written.
-    :param total_frames: The number of frames that should be rendered.
-    :param enabled: If False, no progress bar is shown.
-    """
-    if enabled:
-        thread = threading.Thread(target=_progress_bar_thread,
-                                  args=(pipe_out, stdout, total_frames, bpy.context.scene.cycles.samples))
-        thread.start()
-        try:
-            yield
-        finally:
-            # Send final character, so the thread knows to stop
-            w = os.fdopen(pipe_in, 'w')
-            w.write("\b")
-            w.close()
-            thread.join()
-    else:
-        yield
-
-
 def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_key: Optional[str] = "colors",
            load_keys: Optional[Set[str]] = None, return_data: bool = True,
-           keys_with_alpha_channel: Optional[Set[str]] = None,
-           verbose: bool = False) -> Dict[str, Union[np.ndarray, List[np.ndarray]]]:
+           keys_with_alpha_channel: Optional[Set[str]] = None) -> Dict[str, Union[np.ndarray, List[np.ndarray]]]:
+
+
+
     """ Render all frames.
 
     This will go through all frames from scene.frame_start to scene.frame_end and render each of them.
@@ -664,9 +539,8 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
     :param file_prefix: The prefix to use for writing the images.
     :param output_key: The key to use for registering the output.
     :param load_keys: Set of output keys to load when available
-    :param return_data: Whether to load and return generated data.
+    :param return_data: Whether to load and return generated data. Backwards compatibility to config-based pipeline.
     :param keys_with_alpha_channel: A set containing all keys whose alpha channels should be loaded.
-    :param verbose: If True, more details about the rendering process are printed.
     :return: dict of lists of raw renderer output. Keys can be 'distance', 'colors', 'normals'
     """
     if output_dir is None:
@@ -686,40 +560,16 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
 
     bpy.context.scene.render.filepath = os.path.join(output_dir, file_prefix)
 
+
     # Skip if there is nothing to render
     if bpy.context.scene.frame_end != bpy.context.scene.frame_start:
         if len(get_all_blender_mesh_objects()) == 0:
             raise Exception("There are no mesh-objects to render, "
                             "please load an object before invoking the renderer.")
-        # Print what is rendered
-        total_frames = bpy.context.scene.frame_end - bpy.context.scene.frame_start
-        if load_keys:
-            registered_output_keys = [output["key"] for output in Utility.get_registered_outputs()]
-            keys_to_render = sorted([key for key in load_keys if key in registered_output_keys])
-            print(f"Rendering {total_frames} frames of {', '.join(keys_to_render)}...")
-
         # As frame_end is pointing to the next free frame, decrease it by one, as
         # blender will render all frames in [frame_start, frame_ned]
         bpy.context.scene.frame_end -= 1
-
-        # Define pipe to communicate blenders debug messages to progress bar
-        pipe_out, pipe_in = os.pipe()
-        begin = time.time()
-        with stdout_redirected(pipe_in, enabled=not verbose) as stdout:
-            with _render_progress_bar(pipe_out, pipe_in, stdout, total_frames, enabled=not verbose):
-                bpy.ops.render.render(animation=True, write_still=True)
-
-        # Close Pipes to prevent having unclosed file handles
-        try:
-            os.close(pipe_out)
-        except OSError:
-            pass
-        try:
-            os.close(pipe_in)
-        except OSError:
-            pass
-
-        print(f"Finished rendering after {time.time() - begin:.3f} seconds")
+        bpy.ops.render.render(animation=True, write_still=True)
         # Revert changes
         bpy.context.scene.frame_end += 1
     else:
@@ -730,9 +580,7 @@ def render(output_dir: Optional[str] = None, file_prefix: str = "rgb_", output_k
 
 
 def set_output_format(file_format: Optional[str] = None, color_depth: Optional[int] = None,
-                      enable_transparency: Optional[bool] = None, jpg_quality: Optional[int] = None,
-                      view_transform: Optional[str] = None, look: Optional[str] = None,
-                      exposure: Optional[float] = None, gamma: Optional[float] = None):
+                      enable_transparency: Optional[bool] = None, jpg_quality: Optional[int] = None):
     """ Sets the output format to use for rendering. Default values defined in DefaultConfig.py.
 
     :param file_format: The file format to use, e.q. "PNG", "JPEG" or "OPEN_EXR".
@@ -740,10 +588,6 @@ def set_output_format(file_format: Optional[str] = None, color_depth: Optional[i
     :param enable_transparency: If true, the output will contain a alpha channel and the background will be
                                 set transparent.
     :param jpg_quality: The quality to use, if file format is set to "JPEG".
-    :param view_transform: View transform used when converting image to display space.
-    :param look: Additional transform applied before view transform for artistic needs.
-    :param exposure: Exposure (stops) applied before display transform.
-    :param gamma: Amount of gamma modification applied after display transform.
     """
     if enable_transparency is not None:
         # In case a previous renderer changed these settings
@@ -758,14 +602,6 @@ def set_output_format(file_format: Optional[str] = None, color_depth: Optional[i
     if jpg_quality is not None:
         # only influences jpg quality
         bpy.context.scene.render.image_settings.quality = jpg_quality
-    if view_transform is not None:
-        bpy.context.scene.view_settings.view_transform = view_transform
-    if look is not None:
-        bpy.context.scene.view_settings.look = look
-    if exposure is not None:
-        bpy.context.scene.view_settings.exposure = exposure
-    if gamma is not None:
-        bpy.context.scene.view_settings.gamma = gamma
 
 
 def enable_motion_blur(motion_blur_length: float = 0.5, rolling_shutter_type: str = "NONE",
@@ -925,6 +761,4 @@ def set_render_devices(use_only_cpu: bool = False, desired_gpu_device_type: Unio
                 break
 
         if not found:
-            bpy.context.scene.cycles.device = "CPU"
-            bpy.context.preferences.addons['cycles'].preferences.compute_device_type = "NONE"
-            print("Using only the CPU for rendering")
+            raise RuntimeError(f"No GPU could be found with the specified device types: {desired_gpu_device_type}")

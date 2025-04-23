@@ -71,7 +71,7 @@ def upper_region(objects_to_sample_on: Union[MeshObject, List[MeshObject]],
         vec2 = face[3] - face[0]
         normal = np.cross(vec1, vec2)
         normal /= np.linalg.norm(normal)
-        return (vec1, vec2), normal
+        return (vec1 / 2, vec2 / 2), normal
 
     # determine for each object in objects the region, where to sample on
     for obj in objects_to_sample_on:
@@ -96,7 +96,7 @@ def upper_region(objects_to_sample_on: Union[MeshObject, List[MeshObject]],
         # save the selected face values
         if selected_face is not None:
             vectors, normal = calc_vec_and_normals(selected_face)
-            base_point = selected_face[0]
+            base_point = (selected_face[0] + selected_face[1] + selected_face[2] + selected_face[3]) / 4
             regions.append(Region2D(vectors, normal, base_point))
         else:
             raise RuntimeError(f"Couldn't find a face, for this obj: {obj.get_name()}")

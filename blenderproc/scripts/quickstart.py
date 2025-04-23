@@ -1,4 +1,3 @@
-import blenderproc as bproc
 """
 The quickstart example:
 
@@ -9,6 +8,7 @@ The quickstart example:
 5. The rendered image is saved in an .hdf5 file container
 
 """
+import blenderproc as bproc
 
 import numpy as np
 

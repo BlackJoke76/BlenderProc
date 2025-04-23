@@ -8,8 +8,8 @@ from mathutils import Color
 
 from blenderproc.python.types.EntityUtility import Entity
 from blenderproc.python.utility.Utility import Utility, KeyFrame
-from blenderproc.python.utility.BlenderUtility import get_all_blender_light_objects
-
+from blenderproc.python.types.MaterialUtility import Material
+from blenderproc.python.material import MaterialLoaderUtility
 
 class Light(Entity):
     """
@@ -33,7 +33,6 @@ class Light(Entity):
             light_obj = bpy.data.objects.new(name=name, object_data=light_data)
             bpy.context.collection.objects.link(light_obj)
             super().__init__(light_obj)
-            self.set_radius(0.25)
         else:
             super().__init__(blender_obj)
 
@@ -114,7 +113,7 @@ class Light(Entity):
         self.blender_obj.data.use_nodes = True
         self.blender_obj.data.shadow_soft_size = 0
         self.blender_obj.data.spot_size = 3.14159  # 180deg in rad
-        self.blender_obj.data.use_shadow = False
+        self.blender_obj.data.cycles.cast_shadow = False
 
         nodes = self.blender_obj.data.node_tree.nodes
         links = self.blender_obj.data.node_tree.links
@@ -122,8 +121,6 @@ class Light(Entity):
         node_ox = nodes.get('Emission')
 
         image_data = bpy.data.images.new('pattern', width=pattern.shape[1], height=pattern.shape[0], alpha=True)
-        if pattern.dtype == np.uint8:
-            pattern = pattern / 255.0    # manual cast to range [0,1] to avoid integer casting issues below
         image_data.pixels = pattern.ravel()
 
         # Set Up Nodes
@@ -205,16 +202,6 @@ class Light(Entity):
         with KeyFrame(frame):
             return self.blender_obj.data.energy
 
-    def get_radius(self, frame: Optional[int] = None) -> float:
-        """ Returns the radius / shadow_soft_size of the light.
-
-        :param frame: The frame number which the value should be set to. If None is given, the current
-                      frame number is used.
-        :return: The radius at the specified frame.
-        """
-        with KeyFrame(frame):
-            return self.blender_obj.data.shadow_soft_size
-        
     def get_color(self, frame: Optional[int] = None) -> Color:
         """ Returns the RGB color of the light.
 
@@ -245,19 +232,13 @@ class Light(Entity):
         with KeyFrame(frame):
             return self.blender_obj.data.type
 
+    def get_materials(self) -> List[Optional[Material]]:
+        """ Returns the materials used by the mesh.
 
-def convert_to_lights(blender_objects: List[bpy.types.Object]) -> List[Light]:
-    """ Converts a list of Blender light objects to a list of BlenderProc light objects.
+        :return: A list of materials.
+        """
+        # nodes = self.blender_obj.data.node_tree.nodes
+        # links = self.blender_obj.data.node_tree.links
 
-    :param blender_objects: A list of Blender light objects.
-    :return: A list of BlenderProc light objects.
-    """
-    return [Light(blender_obj=obj) for obj in blender_objects]
+        return Material(self.blender_obj.data)
 
-
-def get_all_light_objects() -> List[Light]:
-    """ Retrieves all light objects in the current Blender scene and converts them to BlenderProc light objects.
-
-    :return: A list of all light objects in the current scene.
-    """
-    return convert_to_lights(get_all_blender_light_objects())

@@ -41,8 +41,6 @@ class Entity(Struct):
         :param frame: The frame number which the value should be set to. If None is given, the current
                       frame number is used.
         """
-        #Make sure object rotation is set in XYZ-Euler coordinates
-        self.blender_obj.rotation_mode = "XYZ"
         self.blender_obj.rotation_euler = rotation_euler
         Utility.insert_keyframe(self.blender_obj, "rotation_euler", frame)
 
@@ -138,6 +136,7 @@ class Entity(Struct):
         # Start with local2parent matrix (if obj has no parent, that equals local2world)
         matrix_world = obj.matrix_basis
 
+        # lzl zhe li zan shi gai xia
         # Go up the scene graph along all parents
         while obj.parent is not None:
             # Add transformation to parent frame
@@ -153,32 +152,6 @@ class Entity(Struct):
     def deselect(self):
         """ Deselects the entity. """
         self.blender_obj.select_set(False)
-
-    def duplicate(self, duplicate_children: bool = True, linked: bool = False) -> "Entity":
-        """ Duplicates the object.
-
-        :param duplicate_children: If True, also all children objects are recursively duplicated.
-        :param linked: If True, object data is not copied.
-        :return: A new mesh object, which is a duplicate of this object.
-        """
-        new_entity = self.blender_obj.copy()
-        if not linked and self.blender_obj.data is not None:
-            new_entity.data = self.blender_obj.data.copy()
-        bpy.context.collection.objects.link(new_entity)
-
-        duplicate_obj = convert_to_entity_subclass(new_entity)
-        if type(duplicate_obj) != type(self):
-            warnings.warn(f"Duplication is only partly supported for {type(self)}")
-
-        if duplicate_children:
-            for child in self.get_children():
-                duplicate_child = child.duplicate(duplicate_children=duplicate_children, linked=linked)
-                duplicate_child.set_parent(duplicate_obj)
-
-                duplicate_child.blender_obj.matrix_basis = child.blender_obj.matrix_basis.copy()
-                duplicate_child.blender_obj.matrix_parent_inverse = child.blender_obj.matrix_parent_inverse.copy()
-
-        return duplicate_obj
 
     def clear_parent(self):
         """ Removes the object's parent and moves the object into the root level of the scene graph. """
@@ -198,7 +171,7 @@ class Entity(Struct):
             self.clear_parent()
         self.blender_obj.parent = new_parent.blender_obj
         # Make sure the object pose stays the same => add inverse of new parent's pose to transformation chain
-        self.blender_obj.matrix_parent_inverse = Matrix(new_parent.get_local2world_mat()).inverted()
+        # self.blender_obj.matrix_parent_inverse = Matrix(new_parent.get_local2world_mat()).inverted()
 
     def get_parent(self) -> Optional["Entity"]:
         """ Returns the parent of the entity.
@@ -238,8 +211,7 @@ class Entity(Struct):
         selected_objects = [self]
         if remove_all_offspring:
             selected_objects.extend(self.get_children(return_all_offspring=True))
-        with bpy.context.temp_override(selected_objects=[e.blender_obj for e in selected_objects]):
-            bpy.ops.object.delete()
+        bpy.ops.object.delete({"selected_objects": [e.blender_obj for e in selected_objects]})
 
     def is_empty(self) -> bool:
         """ Returns whether the entity is from type "EMPTY".
@@ -247,20 +219,6 @@ class Entity(Struct):
         :return: True, if its an empty.
         """
         return self.blender_obj.type == "EMPTY"
-
-    def hide(self, hide_object: bool = True):
-        """ Sets the visibility of the object.
-
-        :param hide_object: Determines whether the object should be hidden in rendering.
-        """
-        self.blender_obj.hide_render = hide_object
-
-    def is_hidden(self) -> bool:
-        """ Returns whether the object is hidden in rendering.
-
-        :return: True, if it is hidden.
-        """
-        return self.blender_obj.hide_render
 
     def __setattr__(self, key, value):
         if key != "blender_obj":
@@ -341,8 +299,6 @@ def delete_multiple(entities: List[Union["Entity"]], remove_all_offspring: bool 
             all_nodes.extend(entity.get_children(return_all_offspring=True))
         # avoid doubles
         all_nodes = set(all_nodes)
-        with bpy.context.temp_override(selected_objects=[e.blender_obj for e in all_nodes]):
-            bpy.ops.object.delete()
+        bpy.ops.object.delete({"selected_objects": [e.blender_obj for e in all_nodes]})
     else:
-        with bpy.context.temp_override(selected_objects=[e.blender_obj for e in entities]):
-            bpy.ops.object.delete()
+        bpy.ops.object.delete({"selected_objects": [e.blender_obj for e in entities]})

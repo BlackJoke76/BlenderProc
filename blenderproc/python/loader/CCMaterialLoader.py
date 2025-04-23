@@ -10,9 +10,10 @@ from blenderproc.python.types.MaterialUtility import Material
 from blenderproc.python.utility.Utility import Utility, resolve_path
 
 
+
 def load_ccmaterials(folder_path: str = "resources/cctextures", used_assets: list = None, preload: bool = False,
                      fill_used_empty_materials: bool = False, add_custom_properties: dict = None,
-                     use_all_materials: bool = False, skip_transparent_materials: bool = True) -> List[Material]:
+                     use_all_materials: bool = False) -> List[Material]:
     """ This method loads all textures obtained from https://ambientCG.com, use the script
     (scripts/download_cc_textures.py) to download all the textures to your pc.
 
@@ -29,8 +30,7 @@ def load_ccmaterials(folder_path: str = "resources/cctextures", used_assets: lis
     :param add_custom_properties:  A dictionary of materials and the respective properties.
     :param use_all_materials: If this is false only a selection of probably useful textures is used. This excludes \
                               some see through texture and non tileable texture.
-    :param skip_transparent_materials: If set to true, all materials with transparent portions are skipped.
-    :return: a list of all loaded materials, if preload is active these materials do not contain any textures yet
+    :return a list of all loaded materials, if preload is active these materials do not contain any textures yet
             and have to be filled before rendering (by calling this function again, no need to save the prior
             returned list)
     """
@@ -43,7 +43,7 @@ def load_ccmaterials(folder_path: str = "resources/cctextures", used_assets: lis
                                "terrazzo", "plaster", "paint", "corrugated steel", "painted wood",
                                "lava cardboard", "clay", "diamond plate", "ice", "moss", "pipe", "candy",
                                "chipboard", "rope", "sponge", "tactile paving", "paper", "cork",
-                               "wood chips"]
+                               "wood chips", "travertine"]
     if not use_all_materials and used_assets is None:
         used_assets = probably_useful_texture
     elif used_assets is not None:
@@ -70,10 +70,6 @@ def load_ccmaterials(folder_path: str = "resources/cctextures", used_assets: lis
             current_path = os.path.join(folder_path, asset)
             if os.path.isdir(current_path):
                 base_image_path = os.path.join(current_path, f"{asset}_2K_Color.jpg")
-                # Filenames have been changed  (https://docs.ambientcg.com/updates/2023/08/29/minor-changes-to-the-filename-structure-of-pbr-materials/)
-                if not os.path.exists(base_image_path):
-                    base_image_path = os.path.join(current_path, f"{asset}_2K-JPG_Color.jpg")
-
                 if not os.path.exists(base_image_path):
                     continue
 
@@ -82,15 +78,8 @@ def load_ccmaterials(folder_path: str = "resources/cctextures", used_assets: lis
                 metallic_image_path = base_image_path.replace("Color", "Metalness")
                 roughness_image_path = base_image_path.replace("Color", "Roughness")
                 alpha_image_path = base_image_path.replace("Color", "Opacity")
-                normal_image_path = base_image_path.replace("Color", "Normal")
-                # Filenames have been changed (blender uses opengl normal maps)
-                if not os.path.exists(normal_image_path):
-                    normal_image_path = base_image_path.replace("Color", "NormalGL")
+                normal_image_path = base_image_path.replace("Color", "NormalDX")
                 displacement_image_path = base_image_path.replace("Color", "Displacement")
-
-                # All transparent materials have an opacity image. Skip them, if desired.
-                if skip_transparent_materials and os.path.exists(alpha_image_path):
-                    continue
 
                 # if the material was already created it only has to be searched
                 if fill_used_empty_materials:
@@ -151,7 +140,8 @@ class _CCMaterialLoader:
         base_color = MaterialLoaderUtility.add_base_color(nodes, links, base_image_path, principled_bsdf)
         collection_of_texture_nodes.append(base_color)
 
-        principled_bsdf.inputs["Specular IOR Level"].default_value = 0.333
+        # principled_bsdf.inputs["Specular"].default_value = 0.333
+        principled_bsdf.inputs["Specular"].default_value = 0.001
 
         ao_node = MaterialLoaderUtility.add_ambient_occlusion(nodes, links, ambient_occlusion_image_path,
                                                               principled_bsdf, base_color)

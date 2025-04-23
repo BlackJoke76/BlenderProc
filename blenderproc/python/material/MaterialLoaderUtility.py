@@ -7,7 +7,7 @@ from pathlib import Path
 
 import bpy
 
-from blenderproc.python.utility.MaterialGetter import MaterialGetter
+from blenderproc.python.modules.provider.getter.Material import Material as MaterialGetter
 from blenderproc.python.types.MaterialUtility import Material
 from blenderproc.python.utility.Utility import Utility
 
@@ -139,7 +139,15 @@ def add_base_color(nodes: bpy.types.Nodes, links: bpy.types.NodeLinks, base_imag
         base_color = create_image_node(nodes, base_image_path, False,
                                        _x_texture_node,
                                        _y_texture_node)
-        links.new(base_color.outputs["Color"], principled_bsdf.inputs["Base Color"])
+        Math_vecotr_node = nodes.new('ShaderNodeVectorMath')
+        Math_vecotr_node.operation = "MULTIPLY"
+        Math_vecotr_node.inputs[1].default_value[0] = 0.8 
+        Math_vecotr_node.inputs[1].default_value[1] = 0.8 
+        Math_vecotr_node.inputs[1].default_value[2] = 0.8 
+
+        links.new(base_color.outputs["Color"], Math_vecotr_node.inputs[0])
+        links.new(Math_vecotr_node.outputs[0], principled_bsdf.inputs["Base Color"])
+        # links.new(base_color.outputs["Color"], principled_bsdf.inputs["Base Color"])
         return base_color
     return None
 
@@ -227,7 +235,7 @@ def add_specular(nodes: bpy.types.Nodes, links: bpy.types.NodeLinks, specular_im
     if os.path.exists(specular_image_path):
         specular_texture = create_image_node(nodes, specular_image_path, True,
                                              _x_texture_node, 0)
-        links.new(specular_texture.outputs["Color"], principled_bsdf.inputs["Specular IOR Level"])
+        links.new(specular_texture.outputs["Color"], principled_bsdf.inputs["Specular"])
         return specular_texture
     return None
 
@@ -347,7 +355,7 @@ def add_displacement(nodes: bpy.types.Nodes, links: bpy.types.NodeLinks, displac
                                                  _y_texture_node * -4)
         displacement_node = nodes.new("ShaderNodeDisplacement")
         displacement_node.inputs["Midlevel"].default_value = 0.5
-        displacement_node.inputs["Scale"].default_value = 0.03
+        displacement_node.inputs["Scale"].default_value = 0.15
         displacement_node.location.x = _x_texture_node * 0.5
         displacement_node.location.y = _y_texture_node * -4
         links.new(displacement_texture.outputs["Color"], displacement_node.inputs["Height"])
@@ -482,7 +490,7 @@ def change_to_texture_less_render(use_alpha_channel):
     principled_bsdf = Utility.get_the_one_node_with_type(nodes, "BsdfPrincipled")
 
     # setting the color values for the shader
-    principled_bsdf.inputs['Specular IOR Level'].default_value = 0.65  # specular
+    principled_bsdf.inputs['Specular'].default_value = 0.65  # specular
     principled_bsdf.inputs['Roughness'].default_value = 0.2  # roughness
 
     for used_object in [obj for obj in bpy.context.scene.objects if hasattr(obj.data, 'materials')]:

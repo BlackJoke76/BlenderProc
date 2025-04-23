@@ -12,13 +12,11 @@ from blenderproc.python.camera import CameraUtility
 from blenderproc.python.utility.BlenderUtility import get_all_blender_mesh_objects
 
 
-def dist2depth(dist: Union[List[np.ndarray], np.ndarray], points_2d: Optional[np.ndarray] = None) -> Union[List[np.ndarray], np.ndarray]:
+def dist2depth(dist: Union[List[np.ndarray], np.ndarray]) -> Union[List[np.ndarray], np.ndarray]:
     """
-    Maps a distance image to depth image, also works with a list of images or a 1-dim array of dist values.
+    Maps a distance image to depth image, also works with a list of images.
 
     :param dist: The distance data.
-    :param points_2d: Can be used to specify the 2D points corresponding to the given distance values:
-                      Is necessary, if the given distance data is not a full distance image.
     :return: The depth data
     """
 
@@ -30,10 +28,7 @@ def dist2depth(dist: Union[List[np.ndarray], np.ndarray], points_2d: Optional[np
     K = CameraUtility.get_intrinsics_as_K_matrix()
     f, cx, cy = K[0, 0], K[0, 2], K[1, 2]
 
-    if points_2d is None:
-        xs, ys = np.meshgrid(np.arange(dist.shape[1]), np.arange(dist.shape[0]))
-    else:
-        xs, ys = points_2d[:, 0], points_2d[:, 1]
+    xs, ys = np.meshgrid(np.arange(dist.shape[1]), np.arange(dist.shape[0]))
 
     # coordinate distances to principal point
     x_opt = np.abs(xs - cx)
@@ -138,7 +133,7 @@ def oil_paint_filter(image: Union[list, np.ndarray], filter_size: int = 5, edges
         if isinstance(image, list) or hasattr(image, "shape") and len(image.shape) > 3:
             return [oil_paint_filter(img, filter_size, edges_only, rgb) for img in image]
 
-        intensity_img = np.sum(image, axis=2) / 3.0
+        intensity_img = (np.sum(image, axis=2) / 3.0)
 
         neighbors = np.array(
             _PostProcessingUtility.get_pixel_neighbors_stacked(image, filter_size, return_list=True))
@@ -210,7 +205,7 @@ def add_kinect_azure_noise(depth: Union[list, np.ndarray], color: Optional[Union
     depth = add_gaussian_shifts(depth, 0.25)
 
     # 0.5mm base noise, 1mm std noise @ 1m, 3.6mm std noise @ 3m
-    depth += (5/10000 + np.maximum((depth-0.5) * 1/1000, 0)) * np.random.normal(size=depth.shape)
+    depth = depth + (5/10000 + np.maximum((depth-0.5) * 1/1000, 0)) * np.random.normal(size=depth.shape)
 
     # Creates the shape of the kernel
     shape = cv2.MORPH_RECT
@@ -271,14 +266,11 @@ def trim_redundant_channels(image: Union[list, np.ndarray]) -> Union[list, np.nd
     to ensure that all channels are really equal.
 
     :param image: Input image or list of images
-    :return: The trimmed image data with preserved input type
+    :return: The trimmed image data.
     """
 
-    if isinstance(image, list):
+    if isinstance(image, list) or hasattr(image, "shape") and len(image.shape) > 3:
         return [trim_redundant_channels(ele) for ele in image]
-
-    if hasattr(image, "shape") and len(image.shape) > 3:
-        return np.array([trim_redundant_channels(ele) for ele in image])
 
     if hasattr(image, "shape") and len(image.shape) == 3 and image.shape[2] == 3:
         image = image[:, :, 0]  # All channels have the same value, so just extract any single channel
@@ -302,6 +294,7 @@ def segmentation_mapping(image: Union[List[np.ndarray], np.ndarray],
 
     return_dict: Dict[str, Union[np.ndarray, List[np.ndarray], List[Dict[str, Any]]]] = {}
     is_stereo_case = bpy.context.scene.render.use_multiview
+
     # convert a single image to a list of stereo images
     if isinstance(image, list):
         if len(image) == 0:
@@ -418,6 +411,7 @@ def segmentation_mapping(image: Union[List[np.ndarray], np.ndarray],
                     elif "instance" not in map_by:
                         raise ValueError(f"The map_by key \"{map_by_attribute}\" requires that the instance map is "
                                          f"stored as well in the output. Change it to: {map_by + ['instance']}")
+
         # combine stereo image and add to output
         for key, list_of_stereo_images in mapped_results_stereo_dict.items():
             if len(list_of_stereo_images) == 1:
@@ -512,7 +506,7 @@ class _PostProcessingUtility:
         """
         # The map was scaled to be ranging along the entire 16-bit color depth, and this is the scaling down operation
         # that should remove some noise or deviations
-        image = (image * 37) / (65536)  # assuming 16 bit color depth
+        image = ((image * 37) / (65536))  # assuming 16 bit color depth
         image = image.astype(np.int32)
         b, counts = np.unique(image.flatten(), return_counts=True)
 

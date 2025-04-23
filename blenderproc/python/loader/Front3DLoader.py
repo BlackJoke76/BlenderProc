@@ -10,17 +10,23 @@ from urllib.request import urlretrieve
 import bpy
 import mathutils
 import numpy as np
+import trimesh
+from mathutils import Vector, Matrix
 
 from blenderproc.python.material import MaterialLoaderUtility
 from blenderproc.python.utility.LabelIdMapping import LabelIdMapping
-from blenderproc.python.types.MeshObjectUtility import MeshObject, create_with_empty_mesh
+from blenderproc.python.utility.CollisionUtility import CollisionUtility
+from blenderproc.python.types.MeshObjectUtility import MeshObject, create_with_empty_mesh, get_all_mesh_objects
 from blenderproc.python.utility.Utility import resolve_path
 from blenderproc.python.loader.ObjectLoader import load_obj
 from blenderproc.python.loader.TextureLoader import load_texture
+from blenderproc.python.filter.Filter import one_by_attr
+
+
 
 
 def load_front3d(json_path: str, future_model_path: str, front_3D_texture_path: str, label_mapping: LabelIdMapping,
-                 ceiling_light_strength: float = 0.8, lamp_light_strength: float = 7.0) -> List[MeshObject]:
+                 ceiling_light_strength: float = 0.0, lamp_light_strength: float = 0.0) -> List[MeshObject]:
     """ Loads the 3D-Front scene specified by the given json file.
 
     :param json_path: Path to the json file, where the house information is stored.
@@ -48,20 +54,26 @@ def load_front3d(json_path: str, future_model_path: str, front_3D_texture_path: 
 
     if "scene" not in data:
         raise ValueError(f"There is no scene data in this json file: {json_path}")
+    
 
-    created_objects = _Front3DLoader.create_mesh_objects_from_file(data, front_3D_texture_path,
+
+    created_objects, room_bound_2Dbox = _Front3DLoader.create_mesh_objects_from_file(data, front_3D_texture_path,
                                                                    ceiling_light_strength, label_mapping, json_path)
 
-    all_loaded_furniture = _Front3DLoader.load_furniture_objs(data, future_model_path,
+    all_loaded_furniture  = _Front3DLoader.load_furniture_objs(data, future_model_path,
                                                               lamp_light_strength, label_mapping)
 
-    created_objects += _Front3DLoader.move_and_duplicate_furniture(data, all_loaded_furniture)
+    # all_loaded_furniture = _Front3DLoader.remove_intersection_obj(all_loaded_furniture)
+
+
+    created_objects += _Front3DLoader.move_and_duplicate_furniture(data, all_loaded_furniture, created_objects)
 
     # add an identifier to the obj
     for obj in created_objects:
         obj.set_cp("is_3d_front", True)
 
-    return created_objects
+    return created_objects, room_bound_2Dbox
+
 
 
 class _Front3DLoader:
@@ -123,14 +135,22 @@ class _Front3DLoader:
         return ret_used_image
 
     @staticmethod
+    def get_bound_min_max_cord(bbox):
+        x_min = np.min(bbox[:, 0])
+        x_max = np.max(bbox[:, 0])
+        y_min = np.min(bbox[:, 1])
+        y_max = np.max(bbox[:, 1])
+        z_min = np.min(bbox[:, 2])
+        z_max = np.max(bbox[:, 2])
+        return  [x_min, x_max, y_min, y_max, z_min, z_max]
+
+    @staticmethod
     def create_mesh_objects_from_file(data: dict, front_3D_texture_path: str, ceiling_light_strength: float,
                                       label_mapping: LabelIdMapping, json_path: str) -> List[MeshObject]:
         """
         This creates for a given data json block all defined meshes and assigns the correct materials.
         This means that the json file contains some mesh, like walls and floors, which have to built up manually.
-
         It also already adds the lighting for the ceiling
-
         :param data: json data dir. Must contain "material" and "mesh"
         :param front_3D_texture_path: Path to the 3D-FRONT-texture folder.
         :param ceiling_light_strength: Strength of the emission shader used in the ceiling.
@@ -167,6 +187,7 @@ class _Front3DLoader:
             # set two custom properties, first that it is a 3D_future object and second the category_id
             obj.set_cp("is_3D_future", True)
             obj.set_cp("category_id", label_mapping.id_from_label(used_obj_name.lower()))
+            obj.set_cp("uid", mesh_data["uid"] )
 
             # get the material uid of the current mesh data
             current_mat = mesh_data["material"]
@@ -300,7 +321,57 @@ class _Front3DLoader:
             # if result:
             #    raise Exception("The generation of the mesh: {} failed!".format(used_obj_name))
 
-        return created_objects
+        # return created_objects
+
+        
+        # for getting the bbox of every room, but if the floor isn`t a square ,the bbox may be not precision
+        for _, room in enumerate(data["scene"]["room"]):
+            for child in room["children"]:
+                if "mesh" in child["instanceid"]:
+                    for obj in created_objects:
+                        if obj.get_cp("uid") == child["ref"]:
+                            name = obj.get_name()
+                            if "ceiling" in name.lower():
+                                obj.set_cp("room", room["instanceid"])
+        
+        room_bound_2Dbox = []
+        for _,room in enumerate(data["scene"]["room"]):
+            # if 'other' in room["instanceid"].lower():
+            #     continue
+
+            min_x = 100
+            max_x = -100
+            min_y = 100
+            max_y = -100
+            z = 0
+            for obj in created_objects:
+                if obj.has_cp("room"):
+                    if obj.get_cp("room") == room["instanceid"]:
+                        box = _Front3DLoader.get_bound_min_max_cord(obj.get_bound_box())
+                        # print(box)
+                        min_x = box[0] if min_x > box[0] else min_x
+                        min_y = box[2] if min_y > box[2] else min_y
+
+                        max_x = box[1] if max_x < box[1] else max_x
+                        max_y = box[3] if max_y < box[3] else max_y
+
+                        z = box[5]
+            room_bound_2Dbox.append([min_x, max_x, min_y, max_y, z])
+            # print('--------------------')
+        
+        # because a bug that walls are emission
+        for obj in created_objects:
+            obj.clear_materials()
+            mat = MaterialLoaderUtility.create(name=used_obj_name + "_material")
+            if("ceil" not in obj.get_name().lower()):
+                BSDF_Node = mat.get_the_one_node_with_type('BsdfPrincipled')
+                BSDF_Node.inputs['Base Color'].default_value = [0.6, 0.6, 0.6, 1]
+
+
+
+            obj.add_material(mat)
+
+        return created_objects, room_bound_2Dbox
 
     @staticmethod
     def load_furniture_objs(data: dict, future_model_path: str, lamp_light_strength: float,
@@ -318,79 +389,146 @@ class _Front3DLoader:
         # collect all loaded furniture objects
         all_objs = []
         # for each furniture element
+
+        left_list = []
+        for i in range(0, len(data["furniture"])):
+            if(data["furniture"][i] not in left_list):
+                left_list.append(data["furniture"][i])
+
+        data["furniture"] = left_list.copy()
+        
+        parents_count = 0
         for ele in data["furniture"]:
             # create the paths based on the "jid"
-            folder_path = os.path.join(future_model_path, ele["jid"])
-            obj_file = os.path.join(folder_path, "raw_model.obj")
-            # if the object exists load it -> a lot of object do not exist
-            # we are unsure why this is -> we assume that not all objects have been made public
-            if os.path.exists(obj_file) and not "7e101ef3-7722-4af8-90d5-7c562834fabd" in obj_file:
-                # load all objects from this .obj file
+            if(ele["jid"].lower().endswith('.glb')):
+                ABO_model_path = "/home/disk2/zqh/LEGO-Net/LEGO-Net_test1/ABO_dataset/ABO_livingroom"
+                obj_file = os.path.join(ABO_model_path, ele["jid"])
                 objs = load_obj(filepath=obj_file)
-                # extract the name, which serves as category id
+
                 used_obj_name = ""
                 if "category" in ele:
                     used_obj_name = ele["category"]
                 elif "title" in ele:
                     used_obj_name = ele["title"]
-                    if "/" in used_obj_name:
-                        used_obj_name = used_obj_name.split("/")[0]
-                if used_obj_name == "":
+                    # if "/" in used_obj_name:
+                    #     used_obj_name = used_obj_name.split("/")[0]
+                if used_obj_name == "" or used_obj_name == None:
                     used_obj_name = "others"
-                for obj in objs:
-                    obj.set_name(used_obj_name)
-                    # add some custom properties
-                    obj.set_cp("uid", ele["uid"])
-                    # this custom property determines if the object was used before
-                    # is needed to only clone the second appearance of this object
-                    obj.set_cp("is_used", False)
-                    obj.set_cp("is_3D_future", True)
-                    obj.set_cp("3D_future_type", "Non-Object")  # is an non object used for the interesting score
-                    # set the category id based on the used obj name
-                    obj.set_cp("category_id", label_mapping.id_from_label(used_obj_name.lower()))
-                    # walk over all materials
-                    for mat in obj.get_materials():
-                        if mat is None:
-                            continue
-                        principled_node = mat.get_nodes_with_type("BsdfPrincipled")
-                        if "bed" in used_obj_name.lower() or "sofa" in used_obj_name.lower():
-                            if len(principled_node) == 1:
-                                principled_node[0].inputs["Roughness"].default_value = 0.5
-                        is_lamp = "lamp" in used_obj_name.lower()
-                        if len(principled_node) == 0 and is_lamp:
-                            # this material has already been transformed
-                            continue
-                        if len(principled_node) == 1:
-                            principled_node = principled_node[0]
-                        else:
-                            raise ValueError(f"The amount of principle nodes can not be more than 1, "
-                                             f"for obj: {obj.get_name()}!")
 
-                        # Front3d .mtl files contain emission color which make the object mistakenly emissive
-                        # => Reset the emission color
-                        principled_node.inputs["Emission Color"].default_value[:3] = [0, 0, 0]
+                objs.set_name(used_obj_name)
+                # add some custom properties
+                objs.set_cp("uid", ele["uid"])
+                # this custom property determines if the object was used before
+                # is needed to only clone the second appearance of this object
+                objs.set_cp("is_used", False)
+                objs.set_cp("is_3D_future", True)
+                objs.set_cp("3D_future_type", "Non-Object")  # is an non object used for the interesting score
+                # set the category id based on the used obj name
+                objs.set_cp("category_id", label_mapping.id_from_label(used_obj_name.lower()))
+                objs.set_cp("is_ABO", True)
+                all_objs.append(objs)
 
-                        # Front3d .mtl files use Tf incorrectly, they make all materials fully transmissive
-                        # Revert that:
-                        principled_node.inputs["Transmission Weight"].default_value = 0
+            else:
+                folder_path = os.path.join(future_model_path, ele["jid"])
+                obj_file = os.path.join(folder_path, "raw_model.obj")
 
-                        # For each a texture node
-                        image_node = mat.new_node('ShaderNodeTexImage')
-                        # and load the texture.png
-                        base_image_path = os.path.join(folder_path, "texture.png")
-                        image_node.image = bpy.data.images.load(base_image_path, check_existing=True)
-                        mat.link(image_node.outputs['Color'], principled_node.inputs['Base Color'])
-                        # if the object is a lamp, do the same as for the ceiling and add an emission shader
-                        if is_lamp:
-                            mat.make_emissive(lamp_light_strength)
+                # folder_path = os.path.join(future_model_path, ele["jid"])
+                # obj_file = os.path.join(future_model_path, ele["jid"])
+                # here should be normalized_model, otherwize some model will very huge in the blender scene 
+                # obj_file = os.path.join(folder_path, "normalized_model.obj")
+                # if the object exists load it -> a lot of object do not exist
+                # we are unsure why this is -> we assume that not all objects have been made public
+                if os.path.exists(obj_file) and not "7e101ef3-7722-4af8-90d5-7c562834fabd" in obj_file:
+                    # load all objects from this .obj file
+                    objs = load_obj(filepath=obj_file)
 
-                all_objs.extend(objs)
-            elif "7e101ef3-7722-4af8-90d5-7c562834fabd" in obj_file:
-                warnings.warn(f"This file {obj_file} was skipped as it can not be read by blender.")
+                    # this means ABO
+                    if(not isinstance(objs, list)):
+                        objs = [objs]
+
+                    used_obj_name = ""
+                    if "category" in ele:
+                        used_obj_name = ele["category"]
+                    elif "title" in ele:
+                        used_obj_name = ele["title"]
+                        # if "/" in used_obj_name:
+                        #     used_obj_name = used_obj_name.split("/")[0]
+                    if used_obj_name == "" or used_obj_name == None:
+                        used_obj_name = "others"
+
+                    if(len(objs) > 1):
+                        parents_count = parents_count + 1
+
+                    for obj in objs:
+                        obj.set_name(used_obj_name)
+                        # add some custom properties
+                        obj.set_cp("uid", ele["uid"])
+                        # this custom property determines if the object was used before
+                        # is needed to only clone the second appearance of this object
+                        obj.set_cp("is_used", False)
+                        obj.set_cp("is_3D_future", True)
+                        obj.set_cp("3D_future_type", "Non-Object")  # is an non object used for the interesting score
+                        # set the category id based on the used obj name
+                        obj.set_cp("category_id", label_mapping.id_from_label(used_obj_name.lower()))
+
+
+                        # 设置parent
+                        if(len(objs) > 1):
+                            obj.set_cp('my_parent', used_obj_name + "parent" + str(parents_count))
+                        # print(type(obj))
+                        # walk over all materials
+                        if(not ele["jid"].lower().endswith('.glb')):
+                            for mat in obj.get_materials():
+                                if mat is None:
+                                    continue
+                                principled_node = mat.get_nodes_with_type("BsdfPrincipled")
+                                principled_node[0].inputs["Transmission"].default_value = 0.0
+                                if "bed" in used_obj_name.lower() or "sofa" in used_obj_name.lower():
+                                    if len(principled_node) == 1:
+                                        principled_node[0].inputs["Roughness"].default_value = 0.5
+
+                                elif "lamp" not in used_obj_name.lower() and "light" not in used_obj_name.lower():
+                                    if len(principled_node) == 1:
+                                        principled_node[0].inputs["Roughness"].default_value = 0.2
+
+                                is_lamp = "lamp" in used_obj_name.lower() or "light" in used_obj_name.lower()
+                                if len(principled_node) == 0 and is_lamp:
+                                    # this material has already been transformed
+                                    continue
+                                if len(principled_node) == 1:
+                                    principled_node = principled_node[0]
+                                else:
+                                    raise ValueError(f"The amount of principle nodes can not be more than 1, "
+                                                    f"for obj: {obj.get_name()}!")
+
+                                # Front3d .mtl files contain emission color which make the object mistakenly emissive
+                                # => Reset the emission color
+                                principled_node.inputs["Emission"].default_value[:3] = [0, 0, 0]
+
+                                # For each a texture node
+                                image_node = mat.new_node('ShaderNodeTexImage')
+                                # and load the texture.png
+                                base_image_path = os.path.join(folder_path, "texture.png")
+                                image_node.image = bpy.data.images.load(base_image_path, check_existing=True)
+                                mat.link(image_node.outputs['Color'], principled_node.inputs['Base Color'])
+                                # if the object is a lamp, do the same as for the ceiling and add an emission shader
+                                # if is_lamp:
+                                #     mat.make_emissive(emission_strength = lamp_light_strength, emission_color = [1.0 ,1.0 ,1.0, 1.0])
+                                    # mat.make_emissive(lamp_light_strength)
+                    all_objs.extend(objs)
+                elif "7e101ef3-7722-4af8-90d5-7c562834fabd" in obj_file:
+                    warnings.warn(f"This file {obj_file} was skipped as it can not be read by blender.")
+
         return all_objs
 
+
+  
+
+                    
+        
+
     @staticmethod
-    def move_and_duplicate_furniture(data: dict, all_loaded_furniture: list) -> List[MeshObject]:
+    def move_and_duplicate_furniture(data: dict, all_loaded_furniture: list, mesh_objects: list) -> List[MeshObject]:
         """
         Move and duplicate the furniture depending on the data in the data json dir.
         After loading each object gets a location based on the data in the json file. Some objects are used more than
@@ -398,35 +536,257 @@ class _Front3DLoader:
 
         :param data: json data dir. Should contain "scene", which should contain "room"
         :param all_loaded_furniture: all objects which have been loaded in load_furniture_objs
+        :param mesh_objects: the mesh that created by the function create_mesh_objects_from_file
         :return: The list of loaded mesh objects.
         """
         # this rotation matrix rotates the given quaternion into the blender coordinate system
         blender_rot_mat = mathutils.Matrix.Rotation(radians(-90), 4, 'X')
         created_objects = []
+        collision_objects = []
+        bvh_cache: Dict[str, mathutils.bvhtree.BVHTree] = {}
         # for each room
         for room_id, room in enumerate(data["scene"]["room"]):
             # for each object in that room
             for child in room["children"]:
                 if "furniture" in child["instanceid"]:
                     # find the object where the uid matches the child ref id
+                    # value count is used to find the parent of meshs 
+                    count = 0
+                    parent = ''
                     for obj in all_loaded_furniture:
                         if obj.get_cp("uid") == child["ref"]:
                             # if the object was used before, duplicate the object and move that duplicated obj
                             if obj.get_cp("is_used"):
                                 new_obj = obj.duplicate()
+                                new_obj.clear_materials()
+                                new_obj.add_material(obj.get_materials()[0].duplicate())
+                    
+
+
+                                if(new_obj.has_cp('my_parent')):
+                                    if(count == 0):
+                                        parent = new_obj.get_name()
+                                        count = 1
+
+                                    new_obj.set_cp('my_parent', parent)
+                                else:
+                                    count = 0
                             else:
                                 # if it is the first time use the object directly
                                 new_obj = obj
+
+                            if(new_obj.has_cp("is_ABO") == True):
+                                bbox = new_obj.get_bound_box()
+                                new_obj.set_origin((bbox[0] + bbox[7]) / 2)
+
                             created_objects.append(new_obj)
                             new_obj.set_cp("is_used", True)
                             new_obj.set_cp("room_id", room_id)
                             new_obj.set_cp("3D_future_type", "Object")  # is an object used for the interesting score
                             new_obj.set_cp("coarse_grained_class", new_obj.get_cp("category_id"))
+                            # this used to move thing munnully
+                            new_obj.set_cp("instanceid", child['instanceid'])
                             # this flips the y and z coordinate to bring it to the blender coordinate system
+                            child["pos"][1] += -0.00005
                             new_obj.set_location(mathutils.Vector(child["pos"]).xzy)
-                            new_obj.set_scale(child["scale"])
+                            # new_obj.set_scale(child["scale"])
+                            new_obj.set_scale(mathutils.Vector(child["scale"]).xyz)
+
+                            # this is right, and you nedd to use it after ...
+                            # new_obj.set_scale(mathutils.Vector(child["scale"]).xzy)
                             # extract the quaternion and convert it to a rotation matrix
                             rotation_mat = mathutils.Quaternion(child["rot"]).to_euler().to_matrix().to_4x4()
+
+                            new_obj.blender_obj.rotation_mode = 'XYZ'
                             # transform it into the blender coordinate system and then to an euler
-                            new_obj.set_rotation_euler((blender_rot_mat @ rotation_mat).to_euler())
+                            if(new_obj.has_cp("is_ABO") == True):
+                                # new_obj.set_rotation_euler((blender_rot_mat @ rotation_mat).to_euler())
+                                euler = (blender_rot_mat @ rotation_mat).to_euler()
+                                euler[0] = 0
+                                new_obj.set_rotation_euler(euler)
+                            else:
+                                new_obj.set_rotation_euler((blender_rot_mat @ rotation_mat).to_euler())
+
+                                
+                            # if(new_obj.has_cp("is_ABO") == True):
+                                
+                            
+                            # used for scene which has ABO
+                            # if not CollisionUtility.check_intersections(new_obj, bvh_cache, created_objects, []):
+                            #     step = 0.05
+                            #     same_obj = []
+                            #     for ele in created_objects:
+                            #         if(ele.has_cp("my_parent") and ele.get_cp("my_parent") != new_obj.get_cp("my_parent")):
+                            #             collision_objects.append(ele)
+                                    
+                            #         if(not ele.has_cp("my_parent")):
+                            #             collision_objects.append(ele)
+
+                            #         if(ele.has_cp("my_parent") and ele.get_cp("my_parent") == new_obj.get_cp("my_parent")):
+                            #             same_obj.append(ele)
+
+                                    
+
+                            #     for i in range(100):
+                                    
+                            #         new_obj.set_location(mathutils.Vector(((child["pos"])[0] + step, child["pos"][2], child["pos"][1])))
+                            #         for ele in same_obj:
+                            #             ele.set_location(mathutils.Vector(((child["pos"])[0] + step, child["pos"][2], child["pos"][1])))
+                            #         if CollisionUtility.check_intersections(new_obj, bvh_cache, collision_objects, []):
+                            #             break
+
+                            #         new_obj.set_location(mathutils.Vector(((child["pos"])[0] - step, child["pos"][2], child["pos"][1])))
+                            #         for ele in same_obj:
+                            #             ele.set_location(mathutils.Vector(((child["pos"])[0] - step, child["pos"][2], child["pos"][1])))
+                            #         if CollisionUtility.check_intersections(new_obj, bvh_cache, collision_objects, []):
+                            #             break
+
+                            #         new_obj.set_location(mathutils.Vector(((child["pos"])[0], child["pos"][2] + step, child["pos"][1])))
+                            #         for ele in same_obj:
+                            #             ele.set_location(mathutils.Vector(((child["pos"])[0], child["pos"][2] + step, child["pos"][1])))
+                            #         if CollisionUtility.check_intersections(new_obj, bvh_cache, collision_objects, []):
+                            #             break
+
+                            #         new_obj.set_location(mathutils.Vector(((child["pos"])[0], child["pos"][2] - step, child["pos"][1])))
+                            #         for ele in same_obj:
+                            #             ele.set_location(mathutils.Vector(((child["pos"])[0], child["pos"][2] - step, child["pos"][1])))
+                            #         if CollisionUtility.check_intersections(new_obj, bvh_cache, collision_objects, []):
+                            #             break
+
+                            #         step += 0.05
+
+
+
+
+
+
+
+
+        
+        # remove_list = []
+        # CollisionManager = trimesh.collision.CollisionManager()
+        # for obj in created_objects:
+        #     if "lighting" in obj.get_name().lower() or "lamp" in obj.get_name().lower():
+        #         mesh_data = obj.get_mesh()
+        #         local2world = Matrix(obj.get_local2world_mat())
+        #         vertices = [local2world @ Vector(v.co) for v in mesh_data.vertices]
+        #         faces = []
+
+        #         # 获取面的顶点索引
+        #         vertex_indices = mesh_data.polygons[0]
+
+        #         # 检查面是否为三角形
+        #         if  len(vertex_indices.vertices) != 3:
+        #             continue
+
+        #         for face in mesh_data.polygons:
+        #             faces.append([v for v in face.vertices])
+
+        #         trimesh_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        #         CollisionManager.add_object(obj.get_name(), trimesh_mesh)
+
+        # for obj in mesh_objects:
+        #     if('wallouter' in obj.get_name().lower() or 'wallinner' in obj.get_name().lower()):
+        #     # if('ceiling' in obj.get_name().lower()):
+        #     # if('wallouter' in obj.get_name().lower()):
+        #         mesh_data = obj.get_mesh()
+        #         local2world = Matrix(obj.get_local2world_mat())
+        #         vertices = [local2world @ Vector(v.co) for v in mesh_data.vertices]
+        #         faces = []
+        #         for face in mesh_data.polygons:
+        #             faces.append([v for v in face.vertices])
+
+        #         trimesh_mesh = trimesh.Trimesh(vertices=vertices, faces=faces)
+        #         CollisionManager.add_object(obj.get_name(), trimesh_mesh)
+
+        # _, names = CollisionManager.in_collision_internal(return_names=True)
+        # # print(names)
+        # # print('-----------')
+        # for name in names:
+        #     if("wall" in name[0].lower() and "wall" in name[1].lower()):
+        #         continue
+
+        #     elif("wall" in name[0].lower() and "wall" not in name[1].lower()):
+        #         mesh = one_by_attr(mesh_objects, "name", name[0])
+        #         obj = one_by_attr(created_objects, "name", name[1])
+
+
+
+        #         box1 = _Front3DLoader.get_bound_min_max_cord(mesh.get_bound_box())
+        #         box2 = _Front3DLoader.get_bound_min_max_cord(obj.get_bound_box())
+        #         # print(box1)
+        #         # print(box2) 
+        #         # print("\n")
+                
+        #         intersect = (box1[1] > box2[0] + 0.1) and (box1[0] + 0.1 < box2[1]) and\
+        #                     (box1[3] > box2[2] + 0.1) and (box1[2] + 0.1 < box2[3]) and\
+        #                     (box1[5] > box2[4] + 0.1) and (box1[4] + 0.1 < box2[5])
+
+        #         if(intersect):
+        #             remove_list.append(obj)
+
+        #     elif("wall" not in name[0].lower() and "wall" in name[1].lower()):
+        #         mesh = one_by_attr(mesh_objects, "name", name[1])
+        #         obj = one_by_attr(created_objects, "name", name[0])
+
+
+        #         box1 = _Front3DLoader.get_bound_min_max_cord(mesh.get_bound_box())
+        #         box2 = _Front3DLoader.get_bound_min_max_cord(obj.get_bound_box())
+        #         # print(box1)
+        #         # print(box2) 
+        #         # print("\n")
+        #         intersect = (box1[1] > box2[0] + 0.1) and (box1[0] + 0.1 < box2[1]) and\
+        #                     (box1[3] > box2[2] + 0.1) and (box1[2] + 0.1 < box2[3]) and\
+        #                     (box1[5] > box2[4] + 0.1) and (box1[4] + 0.1 < box2[5])
+                                
+        #         if(intersect):
+        #             remove_list.append(obj)
+            
+        #     else:
+        #         obj1 = one_by_attr(created_objects, "name", name[0])
+        #         obj2 = one_by_attr(created_objects, "name", name[1])
+
+        #         if(obj1.has_cp('my_parent') and obj2.has_cp('my_parent') and obj1.get_cp('my_parent') == obj2.get_cp('my_parent')):
+        #             # print(name[0])
+        #             # print(name[1])
+        #             # print(obj1.get_cp('my_parent'))
+        #             # print(obj2.get_cp('my_parent'))
+        #             # print('------------')
+        #             continue
+
+        #         # dont need true in get_bound_box(), mabey program bug
+        #         box1 = _Front3DLoader.get_bound_min_max_cord(obj1.get_bound_box())
+        #         box2 = _Front3DLoader.get_bound_min_max_cord(obj2.get_bound_box())
+        #         # print(box1)
+        #         # print(box2)
+        #         # print("\n")
+        #         intersect = (box1[1] > box2[0] + 0.1) and (box1[0] + 0.1 < box2[1]) and\
+        #                     (box1[3] > box2[2] + 0.1) and (box1[2] + 0.1 < box2[3]) and\
+        #                     (box1[5] > box2[4] + 0.1) and (box1[4] + 0.1 < box2[5])
+
+        #         if(not intersect):
+        #             continue
+
+        #         bbox1_volume = obj1.get_bound_box_volume()
+        #         bbox2_volume = obj2.get_bound_box_volume()
+        #         if(bbox1_volume > bbox2_volume):
+        #             remove_list.append(obj2)
+
+        #         else:
+        #             remove_list.append(obj1)
+
+
+        # for obj in remove_list:
+        #     if obj in created_objects:  
+        #         created_objects.remove(obj)
+        #         obj.delete(True)
+
+        # delete furniture that doesn't have room info
+        for obj in get_all_mesh_objects():
+            if obj.has_cp("3D_future_type"):
+                if obj.get_cp("3D_future_type") == "Non-Object":
+                    if obj not in created_objects:
+                        obj.delete(True)
+                    
+
         return created_objects
