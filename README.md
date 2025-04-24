@@ -13,7 +13,7 @@ This fork of BlenderProc has been modified to support shadow removal dataset gen
 
 ### ➕ Added
 
-The following scripts are located in the `scripts/` directory. They are used for rendering, post-processing, and data preparation in our 3D synthetic shadow removal pipeline:
+The following scripts are located in the `RenderTool/` directory. 
 
 | File               | Description                                                       |
 |--------------------|-------------------------------------------------------------------|
