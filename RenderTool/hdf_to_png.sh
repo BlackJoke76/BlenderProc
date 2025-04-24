@@ -1,0 +1,1 @@
+./read_hdf5.sh && ./color_space_convert.sh && ./correct_brightness.sh

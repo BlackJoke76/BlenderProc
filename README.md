@@ -1,3 +1,43 @@
+### 🚧 Customization Notice
+
+This fork of BlenderProc has been modified to support shadow removal dataset generation. Major changes include:
+
+### 🔄 Modified
+
+- `loader/Front3DLoader.py`  
+- `loader/CCMaterialLoader.py`  
+- `types/MaterialUtility.py`  
+- `object/OnSurfaceSampler.py`  
+- `sampler/Front3DPointInRoomSampler.py`  
+- `camera/CameraValidation.py`  
+
+### ➕ Added
+
+The following scripts are located in the `scripts/` directory. They are used for rendering, post-processing, and data preparation in our 3D synthetic shadow removal pipeline:
+
+| File               | Description                                                       |
+|--------------------|-------------------------------------------------------------------|
+| `shell.sh`         | Multi-process rendering script.                                   |
+| `read_hdf5.py`     | Reads rendered data from HDF5 files and combines shadow with shadow-free versions. |
+| `read_hdf5.sh`     | Multi-process wrapper for `read_hdf5.py`.                         |
+| `color_space_convert.sh` | Converts data color space using multi-processing. this requires you to install the [opencolorio](https://www.bing.com/search?q=opencolorio&qs=n&form=QBRE&sp=-1&ghc=1&lq=0&pq=opencolorio&sc=9-11&sk=&cvid=D960FA33215F4D438CD859818B1FA7D0) library            |
+| `exr_to_png.py`    | Converts `.exr` files to `.png` while filtering invalid data.    |
+| `exr_to_png.sh`    | Multi-process wrapper for `exr_to_png.py`.                       |
+| `find_camera.py`   | Extracts camera positions from the 3D-FRONT dataset.              |
+| `find_camera.sh`   | Multi-process wrapper for `find_camera.py`.                       |
+| `main_3DFront.py`  | Renders shadow and shadow-free images using the 3D-FRONT dataset.|
+| `main_objreverse.py` | Renders shadow and shadow-free images using the objreverse and ABO datasets. |
+| `hdf_to_png.sh` | Renders shadow and shadow-free images using the objreverse and ABO datasets. |
+
+### ✅ Tested
+
+Compatible with **BlenderProc v2.5** and **Blender 3.6**.
+
+---
+
+For all original features, usage instructions, and contribution guidelines, refer to the original documentation below.After running `main_3DFront.py` or `main_objreverse.py`, running `hdf_to_png.sh` to get png data.
+
+
 # BlenderProc2
 
 [![Documentation](https://img.shields.io/badge/documentation-passing-brightgreen.svg)](https://dlr-rm.github.io/BlenderProc/)
