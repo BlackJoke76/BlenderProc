@@ -37,6 +37,12 @@ Compatible with **BlenderProc v2.5** and **Blender 3.6**.
 
 For all original features, usage instructions, and contribution guidelines, refer to the original documentation below.After running `main_3DFront.py` or `main_objreverse.py`, running `hdf_to_png.sh` to get png data.
 
+Before running the above scripts, you need to configure the OCIO file by running the following command,don't forget to point to your own OCIO package:
+
+export OCIO=/home/disk5/wc/BlenderProc_fork/blender-3.6.0-linux-x64/3.6/datafiles/colormanagement/config.ocio
+
+
+
 
 # BlenderProc2
 
