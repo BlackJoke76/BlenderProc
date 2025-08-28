@@ -149,7 +149,7 @@ def load_light():
         model_path = os.path.join(model_home, ele)
         model_path = model_path + "/raw_model.obj"
         light_models.append(load_obj(model_path)[0])
-        return light_models
+    return light_models
 
 def cal_distance(obj1, obj2):
     location1 = obj1.get_location()
@@ -199,7 +199,7 @@ def get_fit_light_intensity(obj, lights, lights_count, hit_position, cur_ceil_bo
             intensity *= 0.75
 
     ## Adjust the final brightness based on the distance of the hit location
-    distance_to_hit = cal_distance((obj.get_location()[0] - hit_position[0]) ** 2 +
+    distance_to_hit =  ((obj.get_location()[0] - hit_position[0]) ** 2 +
                        (obj.get_location()[1] - hit_position[1]) ** 2 +
                        (obj.get_location()[2] - hit_position[2]) ** 2) ** 0.5
     intensity /= distance_to_hit
