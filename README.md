@@ -40,7 +40,7 @@ For all original features, usage instructions, and contribution guidelines, refe
 Before running the above scripts, you need to configure the OCIO file by running the following command,don't forget to point to your own OCIO package:
 
 ```bash
-export OCIO=/home/disk5/wc/BlenderProc_fork/blender-3.6.0-linux-x64/3.6/datafiles/colormanagement/config.ocio
+export OCIO=/path/to/your/ocio/config.ocio
 ```
 
 
